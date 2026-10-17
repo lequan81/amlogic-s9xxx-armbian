@@ -429,11 +429,10 @@ jobs:
           echo "status=success" >> ${GITHUB_OUTPUT}
 
       - name: Rebuild Armbian for target boards
-        uses: ./
+        uses: ophub/amlogic-s9xxx-armbian@main
         if: ${{ env.ARMBIAN_URL != '' && !cancelled() }}
         with:
           build_target: armbian
-          armbian_files: build-armbian/armbian-files
           armbian_path: ${{ env.ARMBIAN_URL }}
           armbian_board: ${{ inputs.armbian_board }}
           armbian_kernel: ${{ inputs.armbian_kernel }}
