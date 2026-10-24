@@ -22,7 +22,7 @@ on:
         options:
           - 6.1.y
       kernel_auto:
-        description: "Auto use the latest kernel (MUST be false for custom repo)"
+        description: "Auto use the latest kernel (MUST be false)"
         required: false
         default: false
         type: boolean
@@ -53,15 +53,14 @@ on:
         default: false
         type: boolean
       docker_image:
-        description: "Select Armbian docker image"
+        description: "Select Armbian docker image (Use bookworm for 6.1.y)"
         required: false
-        default: "resolute"
+        default: "bookworm"
         type: choice
         options:
-          - resolute
           - bookworm
           - noble
-          - trixie
+          - resolute
       kernel_sign:
         description: "Set the kernel custom signature"
         required: false
@@ -73,7 +72,7 @@ env:
 
 jobs:
   build:
-    runs-on: ubuntu-26.04-arm
+    runs-on: ubuntu-24.04
     if: ${{ github.event.repository.owner.id == github.event.sender.id }}
     permissions:
       contents: write
@@ -96,7 +95,7 @@ jobs:
           sudo rm -f /swapfile /mnt/swapfile
           sudo apt-get -y update
           sudo apt-get -y purge azure-cli ghc* zulu* llvm* firefox google* dotnet* powershell openjdk* mongodb* moby* || true
-          sudo apt-get -y install $(curl -fsSL https://ophub.org/ubuntu2604-build-armbian-depends)
+          sudo apt-get -y install $(curl -fsSL https://ophub.org/ubuntu2404-build-armbian-depends)
           sudo systemctl daemon-reload
           sudo apt-get -y autoremove --purge
           sudo apt-get clean
@@ -128,7 +127,6 @@ jobs:
       - name: Get kernel source commit hash
         id: kernelhash
         run: |
-          # Query directly to your repository and branch
           api_url="https://api.github.com/repos/lequan81/linux-6.1.y-rockchip/git/ref/heads/rk3528-mytv-net1"
           source_hash=$(curl -fsSL -m 20 \
               -H "Accept: application/vnd.github+json" \
@@ -147,7 +145,7 @@ jobs:
           restore-keys: |
             kernel-${{ inputs.kernel_toolchain }}-${{ inputs.kernel_version }}-
 
-      - name: Compile the kernel [ ${{ inputs.kernel_version }} ]
+      - name: Compile the kernel [ ${{ inputs.kernel_version || '6.1.y' }} ]
         uses: ophub/amlogic-s9xxx-armbian@main
         if: ${{ steps.disk.outputs.status == 'success' && !cancelled() }}
         with:
@@ -175,5 +173,5 @@ jobs:
           make_latest: false
           gh_token: ${{ secrets.GITHUB_TOKEN }}
           body: |
-            - Custom Linux Kernel for RK3528 (VNPT MyTV Net 1).
+            - Custom Linux Kernel 6.1.y for RK3528 (VNPT MyTV Net 1).
             - Compiled from repository: [lequan81/linux-6.1.y-rockchip](https://github.com/lequan81/linux-6.1.y-rockchip/tree/rk3528-mytv-net1).
