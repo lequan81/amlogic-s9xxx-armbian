@@ -10,8 +10,9 @@ on:
   workflow_dispatch:
     inputs:
       kernel_source:
-        description: "Select the kernel source (owner/repo@branch)"
+        description: "Select the kernel source"
         required: false
+        # Trỏ thẳng đến repo và branch DTS của bạn
         default: "lequan81/linux-6.1.y-rockchip@rk3528-mytv-net1"
         type: string
       kernel_version:
@@ -22,8 +23,9 @@ on:
         options:
           - 6.1.y
       kernel_auto:
-        description: "Auto use the latest kernel (MUST be false)"
+        description: "Auto use the latest kernel"
         required: false
+        # Bắt buộc để FALSE để không bị kéo đè mã nguồn upstream
         default: false
         type: boolean
       delete_source:
@@ -53,14 +55,15 @@ on:
         default: false
         type: boolean
       docker_image:
-        description: "Select Armbian docker image (Use bookworm for 6.1.y)"
+        description: "Select Armbian docker image"
         required: false
+        # Dùng bookworm (GCC 12) để trị dứt điểm lỗi Error 2 ở phút 22
         default: "bookworm"
         type: choice
         options:
           - bookworm
-          - noble
           - resolute
+          - noble
       kernel_sign:
         description: "Set the kernel custom signature"
         required: false
@@ -71,13 +74,29 @@ env:
   TZ: Etc/UTC
 
 jobs:
+  setup:
+    runs-on: ubuntu-26.04-arm
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Set build matrix based on kernel_version input
+        id: set-matrix
+        run: |
+          MATRIX='{"include":[{"kernel_version":"${{ inputs.kernel_version || '6.1.y' }}"}]}'
+          echo "matrix=${MATRIX}" >> "${GITHUB_OUTPUT}"
+
   build:
-    runs-on: ubuntu-24.04
+    needs: setup
+    runs-on: ubuntu-26.04-arm
     if: ${{ github.event.repository.owner.id == github.event.sender.id }}
     permissions:
       contents: write
 
-    name: compile-kernel-${{ inputs.kernel_version || '6.1.y' }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.setup.outputs.matrix) }}
+
+    name: compile-kernel-${{ matrix.kernel_version }}
 
     steps:
       - name: Checkout
@@ -95,7 +114,7 @@ jobs:
           sudo rm -f /swapfile /mnt/swapfile
           sudo apt-get -y update
           sudo apt-get -y purge azure-cli ghc* zulu* llvm* firefox google* dotnet* powershell openjdk* mongodb* moby* || true
-          sudo apt-get -y install $(curl -fsSL https://ophub.org/ubuntu2404-build-armbian-depends)
+          sudo apt-get -y install $(curl -fsSL https://ophub.org/ubuntu2604-build-armbian-depends)
           sudo systemctl daemon-reload
           sudo apt-get -y autoremove --purge
           sudo apt-get clean
@@ -104,6 +123,8 @@ jobs:
           sudo timedatectl set-timezone "${TZ:-Etc/UTC}"
           sudo ntpdate ntp.ubuntu.com 0.pool.ntp.org || true
           sudo timedatectl set-ntp true
+          date -u
+          timedatectl status || true
           echo "status=success" >> ${GITHUB_OUTPUT}
 
       - name: Create virtual disk for extended storage
@@ -141,17 +162,17 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /builder/ccache
-          key: kernel-${{ inputs.kernel_toolchain }}-${{ inputs.kernel_version }}-${{ env.source_hash }}
+          key: kernel-${{ inputs.kernel_toolchain }}-${{ matrix.kernel_version }}-${{ env.source_hash }}
           restore-keys: |
-            kernel-${{ inputs.kernel_toolchain }}-${{ inputs.kernel_version }}-
+            kernel-${{ inputs.kernel_toolchain }}-${{ matrix.kernel_version }}-
 
-      - name: Compile the kernel [ ${{ inputs.kernel_version || '6.1.y' }} ]
+      - name: Compile the kernel [ ${{ matrix.kernel_version }} ]
         uses: ophub/amlogic-s9xxx-armbian@main
         if: ${{ steps.disk.outputs.status == 'success' && !cancelled() }}
         with:
           build_target: kernel
           kernel_source: ${{ inputs.kernel_source }}
-          kernel_version: ${{ inputs.kernel_version }}
+          kernel_version: ${{ matrix.kernel_version }}
           kernel_auto: ${{ inputs.kernel_auto }}
           delete_source: ${{ inputs.delete_source }}
           kernel_package: ${{ inputs.kernel_package }}
@@ -173,5 +194,5 @@ jobs:
           make_latest: false
           gh_token: ${{ secrets.GITHUB_TOKEN }}
           body: |
-            - Custom Linux Kernel 6.1.y for RK3528 (VNPT MyTV Net 1).
+            - Custom Linux Kernel for RK3528 (VNPT MyTV Net 1).
             - Compiled from repository: [lequan81/linux-6.1.y-rockchip](https://github.com/lequan81/linux-6.1.y-rockchip/tree/rk3528-mytv-net1).
