@@ -12,7 +12,6 @@ on:
       kernel_source:
         description: "Select the kernel source"
         required: false
-        # Trỏ thẳng đến repo và branch DTS của bạn
         default: "lequan81/linux-6.1.y-rockchip@rk3528-mytv-net1"
         type: string
       kernel_version:
@@ -25,7 +24,6 @@ on:
       kernel_auto:
         description: "Auto use the latest kernel"
         required: false
-        # Bắt buộc để FALSE để không bị kéo đè mã nguồn upstream
         default: false
         type: boolean
       delete_source:
@@ -57,7 +55,6 @@ on:
       docker_image:
         description: "Select Armbian docker image"
         required: false
-        # Dùng bookworm (GCC 12) để trị dứt điểm lỗi Error 2 ở phút 22
         default: "bookworm"
         type: choice
         options:
@@ -166,6 +163,18 @@ jobs:
           restore-keys: |
             kernel-${{ inputs.kernel_toolchain }}-${{ matrix.kernel_version }}-
 
+      # BƯỚC VÁ CẤU HÌNH TỰ ĐỘNG: Chặn đứng lỗi conflicting types của meson_dw_hdmi.c
+      - name: Prepare custom Rockchip kernel config
+        run: |
+          mkdir -p compile-kernel/tools/config
+          if [ ! -f compile-kernel/tools/config/config-6.1 ]; then
+            curl -fsSL https://raw.githubusercontent.com/ophub/kernel/main/config/stable/config-6.1 -o compile-kernel/tools/config/config-6.1
+          fi
+          sed -i 's/^CONFIG_DRM_MESON=.*/# CONFIG_DRM_MESON is not set/' compile-kernel/tools/config/config-6.1
+          sed -i 's/^CONFIG_DRM_SUN4I=.*/# CONFIG_DRM_SUN4I is not set/' compile-kernel/tools/config/config-6.1
+          echo "Patched config-6.1 successfully:"
+          grep -E "CONFIG_DRM_MESON|CONFIG_DRM_SUN4I" compile-kernel/tools/config/config-6.1 || true
+
       - name: Compile the kernel [ ${{ matrix.kernel_version }} ]
         uses: ophub/amlogic-s9xxx-armbian@main
         if: ${{ steps.disk.outputs.status == 'success' && !cancelled() }}
@@ -181,6 +190,8 @@ jobs:
           ccache_clear: ${{ inputs.ccache_clear }}
           docker_hostpath: /builder
           docker_image: ophub/armbian-${{ inputs.docker_image }}:arm64
+          # NẠP THƯ MỤC CONFIG ĐÃ ĐƯỢC VÁ VÀO ĐÂY:
+          kernel_config: compile-kernel/tools/config
 
       - name: Upload Kernel to Release
         uses: ophub/upload-to-releases@main
