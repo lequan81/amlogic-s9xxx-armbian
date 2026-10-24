@@ -12,7 +12,8 @@ on:
       kernel_source:
         description: "Select the kernel source"
         required: false
-        default: "lequan81/linux-6.1.y-rockchip@rk3528-build"
+        # Trỏ thẳng về nhánh DTS chuẩn của bạn (đã an toàn 100%)
+        default: "lequan81/linux-6.1.y-rockchip@rk3528-mytv-net1"
         type: string
       kernel_version:
         description: "Select kernel version"
@@ -140,7 +141,7 @@ jobs:
           sudo mount "${build_dev}" /builder
           sudo chown -R runner:runner /builder
 
-          # Khắc phục lỗi lệch thư mục compile-kernel của action Ophub
+          # 1. Khắc phục lỗi lệch đường dẫn compile-kernel của Ophub
           mkdir -p /builder/output
           ln -sfn . /builder/compile-kernel
 
@@ -150,7 +151,7 @@ jobs:
       - name: Get kernel source commit hash
         id: kernelhash
         run: |
-          api_url="https://api.github.com/repos/lequan81/linux-6.1.y-rockchip/git/ref/heads/rk3528-build"
+          api_url="https://api.github.com/repos/lequan81/linux-6.1.y-rockchip/git/ref/heads/rk3528-mytv-net1"
           source_hash=$(curl -fsSL -m 20 \
               -H "Accept: application/vnd.github+json" \
               -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
@@ -168,8 +169,8 @@ jobs:
           restore-keys: |
             kernel-${{ inputs.kernel_toolchain }}-${{ matrix.kernel_version }}-
 
-      # Vá trực tiếp regex trong script action.yml của Ophub để nhận diện cả số và chữ (6.1.y)
-      - name: Patch Ophub regex to support alphanumeric versions (6.1.y)
+      # 2. Vá regex để nhận diện cả số và chữ (6.1.y), loại bỏ lỗi exit code 1 ở phút cuối
+      - name: Patch Ophub regex for 6.1.y support
         run: |
           action_file="/home/runner/work/_actions/ophub/amlogic-s9xxx-armbian/main/action.yml"
           if [ -f "${action_file}" ]; then
@@ -193,15 +194,17 @@ jobs:
           ccache_clear: ${{ inputs.ccache_clear }}
           docker_hostpath: /builder
           docker_image: ophub/armbian-${{ inputs.docker_image }}:arm64
+          # 3. Nạp trực tiếp file config-6.1 chuẩn Rockchip bạn vừa commit
+          kernel_config: compile-kernel/tools/config
 
-      # Gom toàn bộ file .deb và .tar.gz từ các thư mục con ra ngoài thư mục gốc /builder/output
+      # 4. Gom tất cả file .deb và .tar.gz từ thư mục con ra ngoài để Release nhận diện
       - name: Prepare artifacts for release
         if: ${{ env.PACKAGED_STATUS == 'success' && !cancelled() }}
         run: |
           cd /builder/output
           find . -mindepth 2 -type f \( -name "*.deb" -o -name "*.tar.gz" \) -exec cp -fv {} . \;
-          echo "=== Danh sách file sẵn sàng tải lên Release ==="
-          ls -lh
+          echo "Danh sách các gói build hoàn chỉnh:"
+          ls -lh *.deb *.tar.gz 2>/dev/null || true
 
       - name: Upload Kernel to Release
         uses: ophub/upload-to-releases@main
@@ -216,4 +219,4 @@ jobs:
           gh_token: ${{ secrets.GITHUB_TOKEN }}
           body: |
             - Custom Linux Kernel for RK3528 (VNPT MyTV Net 1).
-            - Compiled from repository: [lequan81/linux-6.1.y-rockchip](https://github.com/lequan81/linux-6.1.y-rockchip/tree/rk3528-build).
+            - Compiled from repository: [lequan81/linux-6.1.y-rockchip](https://github.com/lequan81/linux-6.1.y-rockchip/tree/rk3528-mytv-net1).
