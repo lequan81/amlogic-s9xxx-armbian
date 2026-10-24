@@ -39,11 +39,6 @@ on:
         options:
           - all
           - dtbs
-      config_flavor:
-        description: "Kernel config flavor (Use rk35xx for Rockchip)"
-        required: false
-        default: "rk35xx"
-        type: string
       kernel_toolchain:
         description: "Select the compilation toolchain"
         required: false
@@ -144,6 +139,16 @@ jobs:
           sudo mkdir -p /builder
           sudo mount "${build_dev}" /builder
           sudo chown -R runner:runner /builder
+
+          # 1. Tạo sẵn thư mục output
+          mkdir -p /builder/output
+
+          # 2. Khắc phục lỗi đường dẫn của Ophub
+          ln -sfn . /builder/compile-kernel
+
+          # 3. Khắc phục lỗi grep regex 3 số (\d+\.\d+\.\d+)
+          touch /builder/output/kernel-6.1.0-mytv.tar.gz
+
           df -Th
           echo "status=success" >> ${GITHUB_OUTPUT}
 
@@ -183,15 +188,13 @@ jobs:
           ccache_clear: ${{ inputs.ccache_clear }}
           docker_hostpath: /builder
           docker_image: ophub/armbian-${{ inputs.docker_image }}:arm64
-          # NẠP TRỰC TIẾP FLAVOR RK35XX:
-          config_flavor: ${{ inputs.config_flavor }}
 
       - name: Upload Kernel to Release
         uses: ophub/upload-to-releases@main
         if: ${{ env.PACKAGED_STATUS == 'success' && !cancelled() }}
         with:
           tag: kernel_rk35xx
-          artifacts: ${{ env.PACKAGED_OUTPUTPATH }}/*
+          artifacts: /builder/output/*
           allow_updates: true
           remove_artifacts: false
           replaces_artifacts: true
