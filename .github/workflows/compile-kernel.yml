@@ -140,14 +140,9 @@ jobs:
           sudo mount "${build_dev}" /builder
           sudo chown -R runner:runner /builder
 
-          # 1. Tạo sẵn thư mục output
+          # Fix lỗi đường dẫn tìm output của action ophub
           mkdir -p /builder/output
-
-          # 2. Khắc phục lỗi đường dẫn của Ophub
           ln -sfn . /builder/compile-kernel
-
-          # 3. Khắc phục lỗi grep regex 3 số (\d+\.\d+\.\d+)
-          touch /builder/output/kernel-6.1.0-mytv.tar.gz
 
           df -Th
           echo "status=success" >> ${GITHUB_OUTPUT}
