@@ -18,8 +18,6 @@ on:
           - bookworm
           - noble
           - trixie
-          - resolute
-          - all
       armbian_board:
         description: "Select device board."
         required: false
@@ -32,15 +30,13 @@ on:
         type: choice
         options:
           - 6.1.y
-          - 6.6.y
-          - 6.12.y
       kernel_repo:
-        description: "Set the kernel repository."
+        description: "Set the kernel repository (Current fork)."
         required: false
-        default: "lequan81/linux-6.1.y-rockchip"
+        default: "${{ github.repository }}"
         type: string
       kernel_usage:
-        description: "Set the tags of the kernel release (tag: kernel_<usage>)."
+        description: "Set the tag of kernel release (tag: kernel_<usage>)."
         required: false
         default: "rk35xx"
         type: string
@@ -83,11 +79,7 @@ jobs:
       - name: Set build matrix based on set_release input
         id: set-matrix
         run: |
-          if [[ "${{ inputs.set_release }}" == "all" ]]; then
-            MATRIX='{"include":[{"release":"bookworm"},{"release":"noble"},{"release":"trixie"},{"release":"resolute"}]}'
-          else
-            MATRIX='{"include":[{"release":"${{ inputs.set_release }}"}]}'
-          fi
+          MATRIX='{"include":[{"release":"${{ inputs.set_release }}"}]}'
           echo "matrix=${MATRIX}" >> "${GITHUB_OUTPUT}"
 
   build:
