@@ -39,6 +39,11 @@ on:
         options:
           - all
           - dtbs
+      config_flavor:
+        description: "Kernel config flavor (Use rk35xx for Rockchip)"
+        required: false
+        default: "rk35xx"
+        type: string
       kernel_toolchain:
         description: "Select the compilation toolchain"
         required: false
@@ -163,25 +168,13 @@ jobs:
           restore-keys: |
             kernel-${{ inputs.kernel_toolchain }}-${{ matrix.kernel_version }}-
 
-      # BƯỚC VÁ CẤU HÌNH TỰ ĐỘNG: Chặn đứng lỗi conflicting types của meson_dw_hdmi.c
-      - name: Prepare custom Rockchip kernel config
-        run: |
-          mkdir -p compile-kernel/tools/config
-          if [ ! -f compile-kernel/tools/config/config-6.1 ]; then
-            curl -fsSL https://raw.githubusercontent.com/ophub/kernel/main/config/stable/config-6.1 -o compile-kernel/tools/config/config-6.1
-          fi
-          sed -i 's/^CONFIG_DRM_MESON=.*/# CONFIG_DRM_MESON is not set/' compile-kernel/tools/config/config-6.1
-          sed -i 's/^CONFIG_DRM_SUN4I=.*/# CONFIG_DRM_SUN4I is not set/' compile-kernel/tools/config/config-6.1
-          echo "Patched config-6.1 successfully:"
-          grep -E "CONFIG_DRM_MESON|CONFIG_DRM_SUN4I" compile-kernel/tools/config/config-6.1 || true
-
       - name: Compile the kernel [ ${{ matrix.kernel_version }} ]
         uses: ophub/amlogic-s9xxx-armbian@main
         if: ${{ steps.disk.outputs.status == 'success' && !cancelled() }}
         with:
           build_target: kernel
           kernel_source: ${{ inputs.kernel_source }}
-          kernel_version: ${{ matrix.kernel_version }}
+          kernel_version: ${{ inputs.kernel_version }}
           kernel_auto: ${{ inputs.kernel_auto }}
           delete_source: ${{ inputs.delete_source }}
           kernel_package: ${{ inputs.kernel_package }}
@@ -190,8 +183,8 @@ jobs:
           ccache_clear: ${{ inputs.ccache_clear }}
           docker_hostpath: /builder
           docker_image: ophub/armbian-${{ inputs.docker_image }}:arm64
-          # NẠP THƯ MỤC CONFIG ĐÃ ĐƯỢC VÁ VÀO ĐÂY:
-          kernel_config: compile-kernel/tools/config
+          # NẠP TRỰC TIẾP FLAVOR RK35XX:
+          config_flavor: ${{ inputs.config_flavor }}
 
       - name: Upload Kernel to Release
         uses: ophub/upload-to-releases@main
