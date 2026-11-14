@@ -1,0 +1,13 @@
+[Unit]
+Description=DHCP for MyTV Net 1 diagnostic Wi-Fi AP
+After=mytvnet1-diag-ap.service
+Wants=mytvnet1-diag-ap.service
+
+[Service]
+Type=simple
+ExecStart=/usr/sbin/dnsmasq --keep-in-foreground --conf-file=/etc/mytvnet1-diag/dnsmasq-ap.conf
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
