@@ -1,0 +1,14 @@
+[Unit]
+Description=MyTV Net 1 diagnostic Wi-Fi access point
+After=network-pre.target mytvnet1-diag-capture.service
+Wants=mytvnet1-diag-capture.service
+Before=mytvnet1-diag-ap-dhcp.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/mytvnet1-diag-start-ap
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
