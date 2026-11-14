@@ -7,6 +7,8 @@ Wants=mytvnet1-diag-ap.service
 ConditionPathExists=/sys/class/net/wlan0
 Type=simple
 ExecStart=/usr/sbin/dnsmasq --keep-in-foreground --conf-file=/etc/mytvnet1-diag/dnsmasq-ap.conf
+ExecStartPost=/bin/touch /run/mytvnet1-diag/wifi-dhcp-ready
+ExecStopPost=/bin/rm -f /run/mytvnet1-diag/wifi-dhcp-ready
 Restart=on-failure
 RestartSec=5
 
