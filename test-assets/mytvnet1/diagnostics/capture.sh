@@ -83,9 +83,14 @@ fi
 } >"$OUT" 2>&1
 
 cp "$OUT" "$BASE/latest-report.txt"
+mkdir -p "$RUNDIR"
+touch "$RUNDIR/report-ready"
 if mountpoint -q "$USB"; then
   cp "$OUT" "$USB/latest-report.txt"
+  touch "$RUNDIR/usb-ready"
   sync
+else
+  rm -f "$RUNDIR/usb-ready"
 fi
 
 if [ "$MOUNTED_HERE" -eq 1 ]; then
