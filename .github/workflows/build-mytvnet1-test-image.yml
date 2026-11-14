@@ -207,6 +207,7 @@ jobs:
           mkdir -p "$GITHUB_WORKSPACE/test-output"
           mv "$image.gz" "$GITHUB_WORKSPACE/test-output/Armbian_MyTV-Net1_custom-kernel-uboot.img.gz"
           cp "$work/SHA256SUMS" "$GITHUB_WORKSPACE/test-output/SHA256SUMS"
+          cp "$GITHUB_WORKSPACE/test-assets/mytvnet1/diagnostics/README.md" "$GITHUB_WORKSPACE/test-output/DIAGNOSTICS-README.txt"
           {
             echo "SSID: MyTVNet1-Diag"
             echo "Password: $diag_pass"
