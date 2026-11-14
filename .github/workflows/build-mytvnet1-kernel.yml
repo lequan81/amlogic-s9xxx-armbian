@@ -53,47 +53,16 @@ jobs:
 
           make -C "$src" O="$out" ARCH=arm64 CROSS_COMPILE="$cross" \
             "$KERNEL_DEFCONFIG"
-          "$src/scripts/config" --file "$out/.config" --enable GPIOLIB --enable GPIO_SYSFS
+          "$src/scripts/config" --file "$out/.config" \
+            --enable EXPERT \
+            --enable GPIOLIB \
+            --enable GPIO_SYSFS
           make -C "$src" O="$out" ARCH=arm64 CROSS_COMPILE="$cross" olddefconfig
-          grep -q '^CONFIG_GPIO_SYSFS=y          make -C "$src" O="$out" ARCH=arm64 CROSS_COMPILE="$cross" \
-            -j"$(nproc)" Image modules rockchip/rk3528-mytv-net1.dtb
-
-          release="$(make -s -C "$src" O="$out" ARCH=arm64 \
-            CROSS_COMPILE="$cross" kernelrelease)"
-          install_root="$RUNNER_TEMP/modules-root"
-          make -C "$src" O="$out" ARCH=arm64 CROSS_COMPILE="$cross" \
-            INSTALL_MOD_PATH="$install_root" modules_install
-          depmod -b "$install_root" "$release"
-
-          mkdir -p "$stage/boot/dtb/rockchip" "$stage/modules"
-          install -m 0644 "$out/arch/arm64/boot/Image" "$stage/boot/Image"
-          install -m 0644 \
-            "$out/arch/arm64/boot/dts/rockchip/rk3528-mytv-net1.dtb" \
-            "$stage/boot/dtb/rockchip/rk3528-mytv-net1.dtb"
-          cp -a "$install_root/lib/modules/$release" "$stage/modules/"
-          printf '%s\n' "$release" > "$stage/kernelrelease.txt"
-          cp "$out/.config" "$stage/kernel.config"
-          (
-            cd "$stage"
-            sha256sum boot/Image boot/dtb/rockchip/rk3528-mytv-net1.dtb \
-              kernelrelease.txt kernel.config > SHA256SUMS
-            tar -czf mytvnet1-modules.tar.gz modules
-          )
-          rm -rf "$stage/modules"
-          echo "Built kernel release: $release"
-          cat "$stage/SHA256SUMS"
-
-      - name: Upload test kernel artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: mytvnet1-kernel-${{ inputs.kernel_ref }}
-          path: ${{ runner.temp }}/kernel-artifacts/
-          if-no-files-found: error
-          retention-days: 14
- "$out/.config" || {
+          grep -q '^CONFIG_GPIO_SYSFS=y$' "$out/.config" || {
             echo "GPIO sysfs support is required for the verified FD655 panel driver" >&2
             exit 1
           }
+
           make -C "$src" O="$out" ARCH=arm64 CROSS_COMPILE="$cross" \
             -j"$(nproc)" Image modules rockchip/rk3528-mytv-net1.dtb
 
