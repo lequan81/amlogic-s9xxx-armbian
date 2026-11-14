@@ -3,15 +3,19 @@ set -u
 
 BASE=/var/lib/mytvnet1-diag
 USB=/mnt/mytv-diag
+RUNDIR=/run/mytvnet1-diag
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 RUN_DIR="$BASE/$STAMP"
-mkdir -p "$RUN_DIR" "$USB"
+MOUNTED_HERE=0
+mkdir -p "$RUN_DIR" "$USB" "$RUNDIR"
 chmod 0755 "$BASE" "$RUN_DIR" "$USB"
 
 for _ in $(seq 1 30); do
   if [ -b /dev/disk/by-label/MYTV_DIAG ]; then
     if ! mountpoint -q "$USB"; then
-      mount -o rw,nosuid,nodev,noexec /dev/disk/by-label/MYTV_DIAG "$USB" || true
+      if mount -o rw,nosuid,nodev,noexec /dev/disk/by-label/MYTV_DIAG "$USB"; then
+        MOUNTED_HERE=1
+      fi
     fi
     break
   fi
@@ -19,6 +23,9 @@ for _ in $(seq 1 30); do
 done
 
 if mountpoint -q "$USB"; then
+  if [ -f "$USB/ENABLE_ETH_DHCP" ]; then
+    install -m 0600 "$USB/ENABLE_ETH_DHCP" "$RUNDIR/ENABLE_ETH_DHCP"
+  fi
   mkdir -p "$USB/boots/$STAMP"
   OUT="$USB/boots/$STAMP/report.txt"
 else
@@ -79,5 +86,10 @@ cp "$OUT" "$BASE/latest-report.txt"
 if mountpoint -q "$USB"; then
   cp "$OUT" "$USB/latest-report.txt"
   sync
+fi
+
+if [ "$MOUNTED_HERE" -eq 1 ]; then
+  sync
+  umount "$USB" || logger -t mytvnet1-diag "Could not cleanly unmount diagnostic USB at $USB"
 fi
 logger -t mytvnet1-diag "Boot report written to $OUT"
