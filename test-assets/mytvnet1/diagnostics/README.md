@@ -6,7 +6,7 @@ Use the spare USB stick, format it as FAT32, and set its volume label to exactly
 
 `MYTV_DIAG`
 
-Do not put passwords or other private files on this stick. The diagnostic service writes one report per boot under `boots/` and also refreshes `latest-report.txt`. The full report contains kernel logs, device addresses, interface names, and hardware identifiers.
+Do not put passwords or other private files on this stick. At startup the diagnostic service mounts this stick, writes an early report, copies the Ethernet-DHCP opt-in marker to RAM if present, calls `sync`, and unmounts the stick. About 45 seconds later it repeats the mount/write/sync/unmount cycle with the final network-service status. Reports are stored under `boots/`; `latest-report.txt` is refreshed each time. The full report contains kernel logs, device addresses, interface names, and hardware identifiers.
 
 Connect this USB together with the Armbian test image. Keep the box powered for about two minutes.
 
