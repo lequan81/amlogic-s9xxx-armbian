@@ -24,5 +24,6 @@ ip link set "$IFACE" down 2>/dev/null || true
 ip address flush dev "$IFACE" 2>/dev/null || true
 ip address add 192.168.77.1/24 dev "$IFACE" || exit 1
 ip link set "$IFACE" up || exit 1
+mkdir -p /run/hostapd /run/mytvnet1-diag
 logger -t mytvnet1-diag "Starting diagnostic Wi-Fi AP on $IFACE (192.168.77.1)"
 exec /usr/sbin/hostapd /etc/hostapd/mytvnet1-diag.conf
