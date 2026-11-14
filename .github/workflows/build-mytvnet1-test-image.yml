@@ -52,7 +52,7 @@ jobs:
           work="$RUNNER_TEMP/mytvnet1-image"
           kernel="$RUNNER_TEMP/kernel-artifact"
           bootloader="$GITHUB_WORKSPACE/test-assets/mytvnet1"
-          mkdir -p "$work" "$work/mnt"
+          mkdir -p "$work" "$work/mnt" "$work/bootmnt"
 
           curl --fail --location --retry 3 "$BASE_IMAGE_URL" -o "$work/base.download"
           if file "$work/base.download" | grep -qi 'gzip compressed'; then
@@ -98,6 +98,7 @@ jobs:
 
           loop="$(sudo losetup --find --show --partscan "$image")"
           cleanup() {
+            sudo umount "$work/bootmnt" 2>/dev/null || true
             sudo umount "$work/mnt" 2>/dev/null || true
             sudo losetup -d "$loop" 2>/dev/null || true
           }
@@ -115,6 +116,31 @@ jobs:
             fi
           done < <(lsblk -lnpo NAME "$loop" | tail -n +2)
           test -n "$rootpart" || { echo "Could not find the Armbian root partition" >&2; exit 1; }
+
+          # The Armbian rootfs has a separate /boot partition. Locate the
+          # partition containing boot.cmd and armbianEnv.txt; U-Boot reads
+          # Image and dtb from this filesystem, not rootfs/boot.
+          bootpart=""
+          while read -r part; do
+            [ -b "$part" ] || continue
+            [ "$part" = "$rootpart" ] && continue
+            if sudo mount "$part" "$work/bootmnt" 2>/dev/null; then
+              if [ -f "$work/bootmnt/boot.cmd" ] && [ -f "$work/bootmnt/armbianEnv.txt" ]; then
+                bootpart="$part"
+                break
+              fi
+              sudo umount "$work/bootmnt"
+            fi
+          done < <(lsblk -lnpo NAME "$loop" | tail -n +2)
+          test -n "$bootpart" || { echo "Could not find the Armbian BOOT partition" >&2; exit 1; }
+          grep -Fq '\${prefix}Image' "$work/bootmnt/boot.cmd" || {
+            echo "boot.cmd does not load the expected Image file" >&2
+            exit 1
+          }
+          grep -Fq '\${prefix}dtb/\${fdtfile}' "$work/bootmnt/boot.cmd" || {
+            echo "boot.cmd does not load the DTB selected by fdtfile" >&2
+            exit 1
+          }
 
           # Add diagnostic packages to the ARM64 rootfs while cooking, so the
           # first boot does not need working Ethernet to start the AP/web UI.
@@ -176,30 +202,32 @@ jobs:
             mytvnet1-panel-progress.service
           sudo mkdir -p "$work/mnt/var/lib/mytvnet1-diag" "$work/mnt/mnt/mytv-diag"
 
-          sudo install -m 0644 "$kernel/boot/Image" "$work/mnt/boot/Image"
+          sudo install -m 0644 "$kernel/boot/Image" "$work/bootmnt/Image"
           sudo install -D -m 0644 \
             "$kernel/boot/dtb/rockchip/rk3528-mytv-net1.dtb" \
-            "$work/mnt/boot/dtb/rockchip/rk3528-mytv-net1.dtb"
+            "$work/bootmnt/dtb/rockchip/rk3528-mytv-net1.dtb"
+          sudo cmp "$kernel/boot/Image" "$work/bootmnt/Image"
+          sudo cmp "$kernel/boot/dtb/rockchip/rk3528-mytv-net1.dtb" \
+            "$work/bootmnt/dtb/rockchip/rk3528-mytv-net1.dtb"
           sudo tar -xzf "$kernel/mytvnet1-modules.tar.gz" -C "$work"
           sudo install -d "$work/mnt/lib/modules"
           sudo cp -a "$work/modules/$release" "$work/mnt/lib/modules/"
           sudo depmod -b "$work/mnt" "$release"
 
-          if [ -f "$work/mnt/boot/armbianEnv.txt" ]; then
-            if grep -q '^fdtfile=' "$work/mnt/boot/armbianEnv.txt"; then
-              sudo sed -i 's#^fdtfile=.*#fdtfile=rockchip/rk3528-mytv-net1.dtb#' \
-                "$work/mnt/boot/armbianEnv.txt"
-            else
-              echo 'fdtfile=rockchip/rk3528-mytv-net1.dtb' | \
-                sudo tee -a "$work/mnt/boot/armbianEnv.txt" >/dev/null
-            fi
+          if grep -q '^fdtfile=' "$work/bootmnt/armbianEnv.txt"; then
+            sudo sed -i 's#^fdtfile=.*#fdtfile=rockchip/rk3528-mytv-net1.dtb#' \
+              "$work/bootmnt/armbianEnv.txt"
+          else
+            echo 'fdtfile=rockchip/rk3528-mytv-net1.dtb' | \
+              sudo tee -a "$work/bootmnt/armbianEnv.txt" >/dev/null
           fi
-          if [ -f "$work/mnt/boot/extlinux/extlinux.conf" ]; then
+          if [ -f "$work/bootmnt/extlinux/extlinux.conf" ]; then
             sudo sed -i 's#^[[:space:]]*FDT .*#  FDT /dtb/rockchip/rk3528-mytv-net1.dtb#' \
-              "$work/mnt/boot/extlinux/extlinux.conf"
+              "$work/bootmnt/extlinux/extlinux.conf"
           fi
-          printf '%s\n' "$release" | sudo tee "$work/mnt/boot/mytvnet1-kernelrelease.txt" >/dev/null
+          printf '%s\n' "$release" | sudo tee "$work/bootmnt/mytvnet1-kernelrelease.txt" >/dev/null
           sync
+          sudo umount "$work/bootmnt"
           sudo umount "$work/mnt"
           sudo losetup -d "$loop"
           trap - EXIT
