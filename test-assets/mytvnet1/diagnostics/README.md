@@ -10,6 +10,17 @@ Do not put passwords or other private files on this stick. At startup the diagno
 
 Connect this USB together with the Armbian test image. Keep the box powered for about two minutes.
 
+## 7-segment boot progress
+
+The verified FD655 userspace GPIO driver displays a four-digit stage code and blinks the colon as a heartbeat:
+
+- `0001`: panel service started; Linux reached the multi-user startup phase
+- `0002`: boot diagnostic report was captured
+- `0003`: an AP/DHCP diagnostic path started or an Ethernet/Wi-Fi link is present
+- `0004`: SSH daemon is running and a network path is present
+
+The display shows the highest stage reached. If it stays at `0002`, userspace and log capture ran but no network path was detected. If it stays at `0003`, network/link is present but SSH did not become active. A blank display does not by itself prove a kernel hang: it can also mean the panel GPIO interface failed to initialize. The panel service error will be in the USB report/journal when capture gets far enough.
+
 ## Connect over Wi-Fi
 
 The image starts a WPA2 diagnostic access point when the Wi-Fi driver supports AP mode:
