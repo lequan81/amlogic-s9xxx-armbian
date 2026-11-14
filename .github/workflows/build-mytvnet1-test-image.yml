@@ -1,0 +1,164 @@
+name: Cook MyTV Net 1 test image
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_image_url:
+        description: Public URL of the base Armbian .img or .img.gz built by this fork
+        required: true
+        type: string
+      kernel_run_id:
+        description: Successful run ID from Build MyTV Net 1 kernel and DTB
+        required: true
+        type: string
+      kernel_ref:
+        description: Kernel artifact ref used in the kernel build workflow
+        required: true
+        default: dev-mytv-net1
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  cook:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout AML fork and test bootloader files
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Download custom kernel artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: mytvnet1-kernel-${{ inputs.kernel_ref }}
+          run-id: ${{ inputs.kernel_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: ${{ runner.temp }}/kernel-artifact
+
+      - name: Install image tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y curl file gzip jq kmod parted util-linux
+
+      - name: Download and cook image
+        shell: bash
+        env:
+          BASE_IMAGE_URL: ${{ inputs.base_image_url }}
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/mytvnet1-image"
+          kernel="$RUNNER_TEMP/kernel-artifact"
+          bootloader="$GITHUB_WORKSPACE/test-assets/mytvnet1"
+          mkdir -p "$work" "$work/mnt"
+
+          curl --fail --location --retry 3 "$BASE_IMAGE_URL" -o "$work/base.download"
+          if file "$work/base.download" | grep -qi 'gzip compressed'; then
+            gzip -dc "$work/base.download" > "$work/Armbian_MyTV-Net1_test.img"
+          else
+            cp "$work/base.download" "$work/Armbian_MyTV-Net1_test.img"
+          fi
+          image="$work/Armbian_MyTV-Net1_test.img"
+
+          (
+            cd "$kernel"
+            sha256sum -c SHA256SUMS
+          )
+          release="$(cat "$kernel/kernelrelease.txt")"
+          idb="$bootloader/idbloader.img"
+          fit="$bootloader/u-boot.itb"
+          (cd "$bootloader" && sha256sum -c SHA256SUMS)
+          test -s "$image"
+          test -s "$kernel/boot/Image"
+          test -s "$kernel/boot/dtb/rockchip/rk3528-mytv-net1.dtb"
+          test -s "$idb"
+          test -s "$fit"
+
+          python3 - "$idb" "$fit" <<'PY'
+          import pathlib, sys
+          idb, fit = (pathlib.Path(p).read_bytes() for p in sys.argv[1:])
+          if idb[:4] != b"RKNS":
+              raise SystemExit("idbloader.img does not start with RKNS")
+          if fit[:4] != bytes.fromhex("d00dfeed"):
+              raise SystemExit("u-boot.itb is not a FIT image")
+          if len(idb) > 8 * 1024 * 1024 - 32 * 1024:
+              raise SystemExit("idbloader.img overlaps the 8 MiB U-Boot FIT slot")
+          print(f"IDB loader: {len(idb)} bytes; FIT U-Boot: {len(fit)} bytes")
+          PY
+
+          sector_size="$(sfdisk -J "$image" | jq -r '.partitiontable.sectorsize')"
+          first_start="$(sfdisk -J "$image" | jq -r '.partitiontable.partitions[0].start')"
+          first_start_bytes=$((sector_size * first_start))
+          test "$first_start_bytes" -ge $((8 * 1024 * 1024 + $(stat -c %s "$fit"))) || {
+            echo "First partition starts too early for the selected U-Boot FIT" >&2
+            exit 1
+          }
+
+          loop="$(sudo losetup --find --show --partscan "$image")"
+          cleanup() {
+            sudo umount "$work/mnt" 2>/dev/null || true
+            sudo losetup -d "$loop" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          rootpart=""
+          while read -r part; do
+            [ -b "$part" ] || continue
+            if sudo mount "$part" "$work/mnt" 2>/dev/null; then
+              if [ -f "$work/mnt/etc/os-release" ] && [ -d "$work/mnt/boot" ]; then
+                rootpart="$part"
+                break
+              fi
+              sudo umount "$work/mnt"
+            fi
+          done < <(lsblk -lnpo NAME "$loop" | tail -n +2)
+          test -n "$rootpart" || { echo "Could not find the Armbian root partition" >&2; exit 1; }
+
+          sudo install -m 0644 "$kernel/boot/Image" "$work/mnt/boot/Image"
+          sudo install -D -m 0644 \
+            "$kernel/boot/dtb/rockchip/rk3528-mytv-net1.dtb" \
+            "$work/mnt/boot/dtb/rockchip/rk3528-mytv-net1.dtb"
+          sudo tar -xzf "$kernel/mytvnet1-modules.tar.gz" -C "$work"
+          sudo install -d "$work/mnt/lib/modules"
+          sudo cp -a "$work/modules/lib/modules/$release" "$work/mnt/lib/modules/"
+          sudo depmod -b "$work/mnt" "$release"
+
+          if [ -f "$work/mnt/boot/armbianEnv.txt" ]; then
+            if grep -q '^fdtfile=' "$work/mnt/boot/armbianEnv.txt"; then
+              sudo sed -i 's#^fdtfile=.*#fdtfile=rockchip/rk3528-mytv-net1.dtb#' \
+                "$work/mnt/boot/armbianEnv.txt"
+            else
+              echo 'fdtfile=rockchip/rk3528-mytv-net1.dtb' | \
+                sudo tee -a "$work/mnt/boot/armbianEnv.txt" >/dev/null
+            fi
+          fi
+          if [ -f "$work/mnt/boot/extlinux/extlinux.conf" ]; then
+            sudo sed -i 's#^[[:space:]]*FDT .*#  FDT /dtb/rockchip/rk3528-mytv-net1.dtb#' \
+              "$work/mnt/boot/extlinux/extlinux.conf"
+          fi
+          printf '%s\n' "$release" | sudo tee "$work/mnt/boot/mytvnet1-kernelrelease.txt" >/dev/null
+          sync
+          sudo umount "$work/mnt"
+          sudo losetup -d "$loop"
+          trap - EXIT
+
+          # RK3528 BootROM layout used by the known-good cooking_img files:
+          # idbloader at sector 64 (32 KiB), U-Boot FIT at sector 16384 (8 MiB).
+          sudo dd if="$idb" of="$image" bs=512 seek=64 conv=notrunc,fsync status=none
+          sudo dd if="$fit" of="$image" bs=512 seek=16384 conv=notrunc,fsync status=none
+          sha256sum "$image" "$idb" "$fit" "$kernel/boot/dtb/rockchip/rk3528-mytv-net1.dtb" \
+            | tee "$work/SHA256SUMS"
+          gzip -1 "$image"
+          mkdir -p "$GITHUB_WORKSPACE/test-output"
+          mv "$image.gz" "$GITHUB_WORKSPACE/test-output/Armbian_MyTV-Net1_custom-kernel-uboot.img.gz"
+          cp "$work/SHA256SUMS" "$GITHUB_WORKSPACE/test-output/SHA256SUMS"
+
+      - name: Upload cooked test image
+        uses: actions/upload-artifact@v4
+        with:
+          name: Armbian-MyTV-Net1-custom-kernel-uboot
+          path: test-output/
+          if-no-files-found: error
+          retention-days: 14
