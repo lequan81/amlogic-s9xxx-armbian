@@ -1,0 +1,12 @@
+[Unit]
+Description=Finalize MyTV Net 1 boot diagnostics after network services start
+After=mytvnet1-diag-capture.service mytvnet1-diag-ap.service mytvnet1-diag-ap-dhcp.service mytvnet1-diag-eth-dhcp.service mytvnet1-diag-web.service
+Wants=mytvnet1-diag-capture.service mytvnet1-diag-ap.service mytvnet1-diag-ap-dhcp.service mytvnet1-diag-eth-dhcp.service mytvnet1-diag-web.service
+
+[Service]
+Type=oneshot
+ExecStartPre=/usr/bin/sleep 45
+ExecStart=/usr/local/sbin/mytvnet1-diag-capture
+
+[Install]
+WantedBy=multi-user.target
