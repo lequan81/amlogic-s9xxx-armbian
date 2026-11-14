@@ -5,6 +5,7 @@ Wants=mytvnet1-diag-capture.service
 Before=mytvnet1-diag-ap-dhcp.service
 
 [Service]
+ConditionPathExists=/sys/class/net/wlan0
 Type=simple
 ExecStart=/usr/local/sbin/mytvnet1-diag-start-ap
 Restart=on-failure
