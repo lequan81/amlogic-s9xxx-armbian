@@ -153,10 +153,24 @@ jobs:
           fi
           printf '#!/bin/sh\nexit 101\n' | sudo tee "$policy" >/dev/null
           sudo chmod 0755 "$policy"
+          # Make the runner DNS resolver visible inside the offline ARM64 rootfs chroot.
+          resolv_path="$work/mnt/etc/resolv.conf"
+          if [ -e "$resolv_path" ] || [ -L "$resolv_path" ]; then
+            sudo cp -a "$resolv_path" "$work/resolv.conf.original"
+          fi
+          sudo rm -f "$resolv_path"
+          sudo cp -L /etc/resolv.conf "$resolv_path"
+          grep -Eq "^[[:space:]]*nameserver[[:space:]]+" "$resolv_path" || {
+            echo "Runner resolv.conf has no nameserver" >&2
+            exit 1
+          }
           sudo chroot "$work/mnt" /usr/bin/qemu-aarch64-static -L / /usr/bin/apt-get update
-          sudo chroot "$work/mnt" /usr/bin/qemu-aarch64-static -L / /usr/bin/apt-get install -y \\
-            dnsmasq hostapd iproute2 iw python3 rfkill usbutils wireless-regdb
+          sudo chroot "$work/mnt" /usr/bin/qemu-aarch64-static -L / /usr/bin/apt-get install -y dnsmasq hostapd iproute2 iw python3 rfkill usbutils wireless-regdb
           sudo chroot "$work/mnt" /usr/bin/qemu-aarch64-static -L / /usr/bin/apt-get clean || true
+          sudo rm -f "$resolv_path"
+          if [ -e "$work/resolv.conf.original" ] || [ -L "$work/resolv.conf.original" ]; then
+            sudo cp -a "$work/resolv.conf.original" "$resolv_path"
+          fi
           sudo rm -f "$policy" "$work/mnt/usr/bin/qemu-aarch64-static"
 
           diag="$GITHUB_WORKSPACE/test-assets/mytvnet1/diagnostics"
@@ -195,11 +209,7 @@ jobs:
           EOF
           sudo chmod 0600 "$work/mnt/etc/hostapd/mytvnet1-diag.conf"
           sudo systemctl --root="$work/mnt" disable hostapd.service dnsmasq.service 2>/dev/null || true
-          sudo systemctl --root="$work/mnt" enable \\
-            mytvnet1-diag-capture.service mytvnet1-diag-ap.service \\
-            mytvnet1-diag-ap-dhcp.service mytvnet1-diag-eth-dhcp.service \\
-            mytvnet1-diag-web.service mytvnet1-diag-final.service \
-            mytvnet1-panel-progress.service
+          sudo systemctl --root="$work/mnt" enable mytvnet1-diag-capture.service mytvnet1-diag-ap.service mytvnet1-diag-ap-dhcp.service mytvnet1-diag-eth-dhcp.service mytvnet1-diag-web.service mytvnet1-diag-final.service mytvnet1-panel-progress.service
           sudo mkdir -p "$work/mnt/var/lib/mytvnet1-diag" "$work/mnt/mnt/mytv-diag"
 
           sudo install -m 0644 "$kernel/boot/Image" "$work/bootmnt/Image"
