@@ -41,7 +41,7 @@ jobs:
       - name: Install image tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y curl file gzip jq kmod parted util-linux
+          sudo apt-get install -y binfmt-support curl file gzip jq kmod parted qemu-user-static util-linux
 
       - name: Download and cook image
         shell: bash
@@ -116,6 +116,59 @@ jobs:
           done < <(lsblk -lnpo NAME "$loop" | tail -n +2)
           test -n "$rootpart" || { echo "Could not find the Armbian root partition" >&2; exit 1; }
 
+          # Add diagnostic packages to the ARM64 rootfs while cooking, so the
+          # first boot does not need working Ethernet to start the AP/web UI.
+          diag_pass="$(openssl rand -hex 8)"
+          sudo cp /usr/bin/qemu-aarch64-static "$work/mnt/usr/bin/"
+          policy="$work/mnt/usr/sbin/policy-rc.d"
+          if [ -e "$policy" ]; then
+            echo "Refusing to overwrite existing policy-rc.d" >&2
+            exit 1
+          fi
+          printf '#!/bin/sh\\nexit 101\\n' | sudo tee "$policy" >/dev/null
+          sudo chmod 0755 "$policy"
+          sudo chroot "$work/mnt" /usr/bin/qemu-aarch64-static -L / /usr/bin/apt-get update
+          sudo chroot "$work/mnt" /usr/bin/qemu-aarch64-static -L / /usr/bin/apt-get install -y \\
+            dnsmasq hostapd iw python3 rfkill usbutils
+          sudo rm -f "$policy" "$work/mnt/usr/bin/qemu-aarch64-static"
+          sudo chroot "$work/mnt" /usr/bin/qemu-aarch64-static -L / /usr/bin/apt-get clean || true
+
+          diag="$GITHUB_WORKSPACE/test-assets/mytvnet1/diagnostics"
+          sudo install -D -m 0755 "$diag/capture.sh" "$work/mnt/usr/local/sbin/mytvnet1-diag-capture"
+          sudo install -m 0755 "$diag/start-ap.sh" "$work/mnt/usr/local/sbin/mytvnet1-diag-start-ap"
+          sudo install -m 0755 "$diag/start-eth-dhcp.sh" "$work/mnt/usr/local/sbin/mytvnet1-diag-start-eth-dhcp"
+          sudo install -D -m 0644 "$diag/web.py" "$work/mnt/usr/local/lib/mytvnet1-diag/web.py"
+          sudo install -D -m 0644 "$diag/dnsmasq-ap.conf" "$work/mnt/etc/mytvnet1-diag/dnsmasq-ap.conf"
+          sudo install -m 0644 "$diag/dnsmasq-eth.conf" "$work/mnt/etc/mytvnet1-diag/dnsmasq-eth.conf"
+          sudo install -m 0644 "$diag/mytvnet1-diag-capture.service" "$work/mnt/etc/systemd/system/"
+          sudo install -m 0644 "$diag/mytvnet1-diag-ap.service" "$work/mnt/etc/systemd/system/"
+          sudo install -m 0644 "$diag/mytvnet1-diag-ap-dhcp.service" "$work/mnt/etc/systemd/system/"
+          sudo install -m 0644 "$diag/mytvnet1-diag-eth-dhcp.service" "$work/mnt/etc/systemd/system/"
+          sudo install -m 0644 "$diag/mytvnet1-diag-web.service" "$work/mnt/etc/systemd/system/"
+          sudo install -D -m 0600 /dev/null "$work/mnt/etc/hostapd/mytvnet1-diag.conf"
+          sudo tee "$work/mnt/etc/hostapd/mytvnet1-diag.conf" >/dev/null <<EOF
+          interface=wlan0
+          driver=nl80211
+          ssid=MyTVNet1-Diag
+          country_code=VN
+          ieee80211d=1
+          hw_mode=g
+          channel=6
+          wmm_enabled=1
+          auth_algs=1
+          wpa=2
+          wpa_key_mgmt=WPA-PSK
+          rsn_pairwise=CCMP
+          wpa_passphrase=$diag_pass
+          EOF
+          sudo chmod 0600 "$work/mnt/etc/hostapd/mytvnet1-diag.conf"
+          sudo systemctl --root="$work/mnt" disable hostapd.service dnsmasq.service 2>/dev/null || true
+          sudo systemctl --root="$work/mnt" enable \\
+            mytvnet1-diag-capture.service mytvnet1-diag-ap.service \\
+            mytvnet1-diag-ap-dhcp.service mytvnet1-diag-eth-dhcp.service \\
+            mytvnet1-diag-web.service
+          sudo mkdir -p "$work/mnt/var/lib/mytvnet1-diag" "$work/mnt/mnt/mytv-diag"
+
           sudo install -m 0644 "$kernel/boot/Image" "$work/mnt/boot/Image"
           sudo install -D -m 0644 \
             "$kernel/boot/dtb/rockchip/rk3528-mytv-net1.dtb" \
@@ -154,6 +207,12 @@ jobs:
           mkdir -p "$GITHUB_WORKSPACE/test-output"
           mv "$image.gz" "$GITHUB_WORKSPACE/test-output/Armbian_MyTV-Net1_custom-kernel-uboot.img.gz"
           cp "$work/SHA256SUMS" "$GITHUB_WORKSPACE/test-output/SHA256SUMS"
+          {
+            echo "SSID: MyTVNet1-Diag"
+            echo "Password: $diag_pass"
+            echo "Wi-Fi URL: http://192.168.77.1:8080"
+            echo "Optional direct Ethernet: create an empty ENABLE_ETH_DHCP file on the MYTV_DIAG USB, connect laptop directly, then open http://192.168.88.1:8080"
+          } > "$GITHUB_WORKSPACE/test-output/DIAGNOSTIC-ACCESS.txt"
 
       - name: Upload cooked test image
         uses: actions/upload-artifact@v4
