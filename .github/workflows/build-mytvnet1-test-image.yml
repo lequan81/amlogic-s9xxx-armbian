@@ -41,7 +41,7 @@ jobs:
       - name: Install image tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y binfmt-support curl file gzip jq kmod parted qemu-user-static util-linux
+          sudo apt-get install -y binfmt-support curl file gcc-aarch64-linux-gnu gzip jq kmod parted qemu-user-static util-linux
 
       - name: Download and cook image
         shell: bash
@@ -134,6 +134,8 @@ jobs:
           sudo rm -f "$policy" "$work/mnt/usr/bin/qemu-aarch64-static"
 
           diag="$GITHUB_WORKSPACE/test-assets/mytvnet1/diagnostics"
+          aarch64-linux-gnu-gcc -O2 -Wall -Wextra -std=gnu11 "$diag/panel-progress.c" -o "$work/mytvnet1-panel-progress"
+          sudo install -m 0755 "$work/mytvnet1-panel-progress" "$work/mnt/usr/local/sbin/mytvnet1-panel-progress"
           sudo install -D -m 0755 "$diag/capture.sh" "$work/mnt/usr/local/sbin/mytvnet1-diag-capture"
           sudo install -m 0755 "$diag/start-ap.sh" "$work/mnt/usr/local/sbin/mytvnet1-diag-start-ap"
           sudo install -m 0755 "$diag/start-eth-dhcp.sh" "$work/mnt/usr/local/sbin/mytvnet1-diag-start-eth-dhcp"
@@ -146,10 +148,13 @@ jobs:
           sudo install -m 0644 "$diag/mytvnet1-diag-eth-dhcp.service" "$work/mnt/etc/systemd/system/"
           sudo install -m 0644 "$diag/mytvnet1-diag-web.service" "$work/mnt/etc/systemd/system/"
           sudo install -m 0644 "$diag/mytvnet1-diag-final.service" "$work/mnt/etc/systemd/system/"
+          sudo install -m 0644 "$diag/mytvnet1-panel-progress.service" "$work/mnt/etc/systemd/system/"
           sudo install -D -m 0600 /dev/null "$work/mnt/etc/hostapd/mytvnet1-diag.conf"
           sudo tee "$work/mnt/etc/hostapd/mytvnet1-diag.conf" >/dev/null <<EOF
           interface=wlan0
           driver=nl80211
+          ctrl_interface=/run/hostapd
+          ctrl_interface_group=0
           ssid=MyTVNet1-Diag
           country_code=VN
           ieee80211d=1
@@ -167,7 +172,8 @@ jobs:
           sudo systemctl --root="$work/mnt" enable \\
             mytvnet1-diag-capture.service mytvnet1-diag-ap.service \\
             mytvnet1-diag-ap-dhcp.service mytvnet1-diag-eth-dhcp.service \\
-            mytvnet1-diag-web.service mytvnet1-diag-final.service
+            mytvnet1-diag-web.service mytvnet1-diag-final.service \
+            mytvnet1-panel-progress.service
           sudo mkdir -p "$work/mnt/var/lib/mytvnet1-diag" "$work/mnt/mnt/mytv-diag"
 
           sudo install -m 0644 "$kernel/boot/Image" "$work/mnt/boot/Image"
