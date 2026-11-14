@@ -1,0 +1,13 @@
+[Unit]
+Description=Capture MyTV Net 1 boot diagnostics to USB
+After=local-fs.target systemd-udev-settle.service
+Wants=systemd-udev-settle.service
+Before=mytvnet1-diag-ap.service mytvnet1-diag-ap-dhcp.service mytvnet1-diag-eth-dhcp.service mytvnet1-diag-web.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/mytvnet1-diag-capture
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
