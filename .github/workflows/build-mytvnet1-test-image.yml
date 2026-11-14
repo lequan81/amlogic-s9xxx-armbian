@@ -129,7 +129,7 @@ jobs:
           sudo chmod 0755 "$policy"
           sudo chroot "$work/mnt" /usr/bin/qemu-aarch64-static -L / /usr/bin/apt-get update
           sudo chroot "$work/mnt" /usr/bin/qemu-aarch64-static -L / /usr/bin/apt-get install -y \\
-            dnsmasq hostapd iw python3 rfkill usbutils
+            dnsmasq hostapd iproute2 iw python3 rfkill usbutils wireless-regdb
           sudo chroot "$work/mnt" /usr/bin/qemu-aarch64-static -L / /usr/bin/apt-get clean || true
           sudo rm -f "$policy" "$work/mnt/usr/bin/qemu-aarch64-static"
 
@@ -145,6 +145,7 @@ jobs:
           sudo install -m 0644 "$diag/mytvnet1-diag-ap-dhcp.service" "$work/mnt/etc/systemd/system/"
           sudo install -m 0644 "$diag/mytvnet1-diag-eth-dhcp.service" "$work/mnt/etc/systemd/system/"
           sudo install -m 0644 "$diag/mytvnet1-diag-web.service" "$work/mnt/etc/systemd/system/"
+          sudo install -m 0644 "$diag/mytvnet1-diag-final.service" "$work/mnt/etc/systemd/system/"
           sudo install -D -m 0600 /dev/null "$work/mnt/etc/hostapd/mytvnet1-diag.conf"
           sudo tee "$work/mnt/etc/hostapd/mytvnet1-diag.conf" >/dev/null <<EOF
           interface=wlan0
@@ -166,7 +167,7 @@ jobs:
           sudo systemctl --root="$work/mnt" enable \\
             mytvnet1-diag-capture.service mytvnet1-diag-ap.service \\
             mytvnet1-diag-ap-dhcp.service mytvnet1-diag-eth-dhcp.service \\
-            mytvnet1-diag-web.service
+            mytvnet1-diag-web.service mytvnet1-diag-final.service
           sudo mkdir -p "$work/mnt/var/lib/mytvnet1-diag" "$work/mnt/mnt/mytv-diag"
 
           sudo install -m 0644 "$kernel/boot/Image" "$work/mnt/boot/Image"
