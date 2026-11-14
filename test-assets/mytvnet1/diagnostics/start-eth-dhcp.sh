@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-USB=/mnt/mytv-diag
-MARKER="$USB/ENABLE_ETH_DHCP"
-if ! mountpoint -q "$USB" || [ ! -f "$MARKER" ]; then
+RUNDIR=/run/mytvnet1-diag
+MARKER="$RUNDIR/ENABLE_ETH_DHCP"
+if [ ! -f "$MARKER" ]; then
   logger -t mytvnet1-diag "Ethernet DHCP disabled; create ENABLE_ETH_DHCP on MYTV_DIAG USB to enable direct-cable mode"
   exit 0
 fi
