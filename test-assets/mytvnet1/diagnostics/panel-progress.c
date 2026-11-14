@@ -168,10 +168,14 @@ int main(void)
     usleep(20000);
 
     int previous_stage = -1;
+    int highest_stage = 1;
     uint8_t previous_icons = 0xff;
     while (running) {
         uint8_t icons = 0;
-        int stage = current_stage(&icons);
+        int observed_stage = current_stage(&icons);
+        if (observed_stage > highest_stage)
+            highest_stage = observed_stage;
+        int stage = highest_stage;
         if (stage != previous_stage || icons != previous_icons) {
             show_stage(stage, icons);
             previous_stage = stage;
