@@ -120,15 +120,14 @@ static bool carrier_up(const char *iface)
 
 static bool has_external_usb(void)
 {
-    return file_exists("/sys/bus/usb/devices/3-1/idVendor") ||
-           file_exists("/sys/bus/usb/devices/1-1/idVendor") ||
-           file_exists("/sys/bus/usb/devices/2-1/idVendor");
+    return file_exists("/run/mytvnet1-diag/usb-ready");
 }
 
 static int current_stage(uint8_t *icons)
 {
     int stage = 1; /* panel service has started */
-    bool wifi = file_exists("/run/mytvnet1-diag/wifi-ap-ready");
+    bool wifi = file_exists("/run/mytvnet1-diag/wifi-ap-ready") &&
+                file_exists("/run/mytvnet1-diag/wifi-dhcp-ready");
     bool eth = file_exists("/run/mytvnet1-diag/eth-dhcp-ready");
     bool lan_link = carrier_up("end0") || carrier_up("eth0");
     bool wifi_link = carrier_up("wlan0");
