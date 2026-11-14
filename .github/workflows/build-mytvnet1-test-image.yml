@@ -122,7 +122,7 @@ jobs:
             "$work/mnt/boot/dtb/rockchip/rk3528-mytv-net1.dtb"
           sudo tar -xzf "$kernel/mytvnet1-modules.tar.gz" -C "$work"
           sudo install -d "$work/mnt/lib/modules"
-          sudo cp -a "$work/modules/lib/modules/$release" "$work/mnt/lib/modules/"
+          sudo cp -a "$work/modules/$release" "$work/mnt/lib/modules/"
           sudo depmod -b "$work/mnt" "$release"
 
           if [ -f "$work/mnt/boot/armbianEnv.txt" ]; then
