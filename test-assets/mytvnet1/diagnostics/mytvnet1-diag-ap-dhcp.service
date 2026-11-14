@@ -4,6 +4,7 @@ After=mytvnet1-diag-ap.service
 Wants=mytvnet1-diag-ap.service
 
 [Service]
+ConditionPathExists=/sys/class/net/wlan0
 Type=simple
 ExecStart=/usr/sbin/dnsmasq --keep-in-foreground --conf-file=/etc/mytvnet1-diag/dnsmasq-ap.conf
 Restart=on-failure
