@@ -125,13 +125,13 @@ jobs:
             echo "Refusing to overwrite existing policy-rc.d" >&2
             exit 1
           fi
-          printf '#!/bin/sh\\nexit 101\\n' | sudo tee "$policy" >/dev/null
+          printf '#!/bin/sh\nexit 101\n' | sudo tee "$policy" >/dev/null
           sudo chmod 0755 "$policy"
           sudo chroot "$work/mnt" /usr/bin/qemu-aarch64-static -L / /usr/bin/apt-get update
           sudo chroot "$work/mnt" /usr/bin/qemu-aarch64-static -L / /usr/bin/apt-get install -y \\
             dnsmasq hostapd iw python3 rfkill usbutils
-          sudo rm -f "$policy" "$work/mnt/usr/bin/qemu-aarch64-static"
           sudo chroot "$work/mnt" /usr/bin/qemu-aarch64-static -L / /usr/bin/apt-get clean || true
+          sudo rm -f "$policy" "$work/mnt/usr/bin/qemu-aarch64-static"
 
           diag="$GITHUB_WORKSPACE/test-assets/mytvnet1/diagnostics"
           sudo install -D -m 0755 "$diag/capture.sh" "$work/mnt/usr/local/sbin/mytvnet1-diag-capture"
