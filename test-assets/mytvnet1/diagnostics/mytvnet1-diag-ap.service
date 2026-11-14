@@ -8,6 +8,8 @@ Before=mytvnet1-diag-ap-dhcp.service
 ConditionPathExists=/sys/class/net/wlan0
 Type=simple
 ExecStart=/usr/local/sbin/mytvnet1-diag-start-ap
+ExecStartPost=/bin/sh -c 'for n in $(seq 1 15); do if hostapd_cli -i wlan0 ping 2>/dev/null | grep -q PONG; then touch /run/mytvnet1-diag/wifi-ap-ready; exit 0; fi; sleep 1; done; exit 1'
+ExecStopPost=/bin/rm -f /run/mytvnet1-diag/wifi-ap-ready
 Restart=on-failure
 RestartSec=10
 
