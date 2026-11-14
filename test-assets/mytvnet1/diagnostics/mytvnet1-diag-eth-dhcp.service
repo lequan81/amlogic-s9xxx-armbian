@@ -1,0 +1,13 @@
+[Unit]
+Description=Optional direct-cable DHCP server for MyTV Net 1 diagnostics
+After=network-pre.target mytvnet1-diag-capture.service
+Wants=mytvnet1-diag-capture.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/mytvnet1-diag-start-eth-dhcp
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
