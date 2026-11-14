@@ -1,0 +1,13 @@
+[Unit]
+Description=Local MyTV Net 1 diagnostic web page
+After=mytvnet1-diag-capture.service mytvnet1-diag-ap.service mytvnet1-diag-eth-dhcp.service
+Wants=mytvnet1-diag-capture.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/lib/mytvnet1-diag/web.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
