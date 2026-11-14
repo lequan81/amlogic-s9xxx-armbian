@@ -133,11 +133,11 @@ jobs:
             fi
           done < <(lsblk -lnpo NAME "$loop" | tail -n +2)
           test -n "$bootpart" || { echo "Could not find the Armbian BOOT partition" >&2; exit 1; }
-          grep -Fq '\${prefix}Image' "$work/bootmnt/boot.cmd" || {
+          grep -Fq '${prefix}Image' "$work/bootmnt/boot.cmd" || {
             echo "boot.cmd does not load the expected Image file" >&2
             exit 1
           }
-          grep -Fq '\${prefix}dtb/\${fdtfile}' "$work/bootmnt/boot.cmd" || {
+          grep -Fq '${prefix}dtb/${fdtfile}' "$work/bootmnt/boot.cmd" || {
             echo "boot.cmd does not load the DTB selected by fdtfile" >&2
             exit 1
           }
