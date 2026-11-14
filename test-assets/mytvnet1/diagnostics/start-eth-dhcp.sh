@@ -21,4 +21,14 @@ ip address flush dev "$IFACE"
 ip address add 192.168.88.1/24 dev "$IFACE"
 ip link set "$IFACE" up
 logger -t mytvnet1-diag "Ethernet direct-cable DHCP enabled on $IFACE (192.168.88.1)"
-exec /usr/sbin/dnsmasq --keep-in-foreground --conf-file=/etc/mytvnet1-diag/dnsmasq-eth.conf --interface="$IFACE"
+mkdir -p "$RUNDIR"
+trap 'rm -f "$RUNDIR/eth-dhcp-ready"' EXIT
+/usr/sbin/dnsmasq --keep-in-foreground --conf-file=/etc/mytvnet1-diag/dnsmasq-eth.conf --interface="$IFACE" &
+dnsmasq_pid=$!
+sleep 2
+if ! kill -0 "$dnsmasq_pid" 2>/dev/null; then
+  wait "$dnsmasq_pid"
+  exit 1
+fi
+touch "$RUNDIR/eth-dhcp-ready"
+wait "$dnsmasq_pid"
