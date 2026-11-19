@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       base_image_url:
-        description: Public URL of a full-disk Armbian 26.11 .img or .img.gz image
+        description: Full-disk Armbian image with BOOT and ROOTFS partitions at the verified MyTV offsets
         required: true
         type: string
       kernel_run_id:
@@ -108,9 +108,24 @@ jobs:
           print(f"IDB loader: {len(idb)} bytes; FIT U-Boot: {len(fit)} bytes")
           PY
 
-          sector_size="$(sfdisk -J "$image" | jq -r '.partitiontable.sectorsize')"
-          first_start="$(sfdisk -J "$image" | jq -r '.partitiontable.partitions[0].start')"
-          first_start_bytes=$((sector_size * first_start))
+          partition_json="$(sfdisk -J "$image")"
+          sector_size="$(jq -r '.partitiontable.sectorsize' <<<"$partition_json")"
+          mapfile -t partition_starts < <(jq -r '.partitiontable.partitions[].start' <<<"$partition_json")
+          mapfile -t partition_sizes < <(jq -r '.partitiontable.partitions[].size' <<<"$partition_json")
+          if [[ "$sector_size" != 512 || "${#partition_starts[@]}" -ne 2 || \
+                "${partition_starts[0]}" != 32768 || "${partition_starts[1]}" != 1081344 ]]; then
+            echo "Expected the verified two-partition Armbian layout: BOOT starts at LBA 32768 and ROOTFS at LBA 1081344 (512-byte sectors)." >&2
+            echo "A single-rootfs image from the direct source-build workflow is not a valid base for this cooker." >&2
+            sfdisk -d "$image" >&2 || true
+            exit 1
+          fi
+          boot_end_lba=$((partition_starts[0] + partition_sizes[0] - 1))
+          root_end_lba=$((partition_starts[1] + partition_sizes[1] - 1))
+          (( boot_end_lba < partition_starts[1] )) || {
+            echo "BOOT and ROOTFS partitions overlap" >&2
+            exit 1
+          }
+          first_start_bytes=$((sector_size * partition_starts[0]))
           test "$first_start_bytes" -ge $((8 * 1024 * 1024 + $(stat -c %s "$fit"))) || {
             echo "First partition starts too early for the verified U-Boot FIT" >&2
             exit 1
@@ -154,6 +169,10 @@ jobs:
             fi
           done < <(lsblk -lnpo NAME "$loop" | tail -n +2)
           test -n "$bootpart" || { echo "Could not find the Armbian BOOT partition" >&2; exit 1; }
+          [[ "$bootpart" == "${loop}p1" && "$rootpart" == "${loop}p2" ]] || {
+            echo "Expected BOOT as partition 1 and ROOTFS as partition 2" >&2
+            exit 1
+          }
           grep -Fq '${prefix}Image' "$work/bootmnt/boot.cmd" || {
             echo "boot.cmd does not load Image" >&2
             exit 1
@@ -337,6 +356,12 @@ jobs:
           )
           {
             echo "variant=$IMAGE_VARIANT"
+            echo "partition_table=gpt"
+            echo "boot_start_lba=${partition_starts[0]}"
+            echo "boot_end_lba=$boot_end_lba"
+            echo "rootfs_start_lba=${partition_starts[1]}"
+            echo "rootfs_end_lba=$root_end_lba"
+            echo "eMMC_first_10MiB=not included or modified; this workflow only builds an SD-card image"
             echo "idbloader_sha256=$(sha256sum "$idb" | awk '{print $1}')"
             echo "u_boot_fit_sha256=$(sha256sum "$fit" | awk '{print $1}')"
             if [[ "$IMAGE_VARIANT" != "baseline" ]]; then
@@ -345,6 +370,15 @@ jobs:
               echo "mytv_dtb_sha256=$(sha256sum "$kernel/boot/dtb/rockchip/rk3528-mytv-net1.dtb" | awk '{print $1}')"
             fi
           } > "$GITHUB_WORKSPACE/test-output/BUILD-INFO.txt"
+          cat > "$GITHUB_WORKSPACE/test-output/FLASH-INSTRUCTIONS.txt" <<'EOF'
+          Target: removable SD card only. This workflow does not write to the box's eMMC.
+
+          Keep the existing eMMC contents, including its first 10 MiB, unchanged while testing SD boot. Community reports describe RK3528 TV boxes whose early boot stage reads persistent U-Boot environment from eMMC; the exact behavior can vary by board and factory firmware.
+
+          Do not copy an eMMC first-10-MiB dump over the beginning of this SD image. The dump includes the eMMC GPT and environment and is a recovery/diagnostic backup, not a replacement for the SD image's partition table. The SD image already contains the verified loader files at LBA 64 and LBA 16384.
+
+          This image uses two partitions: BOOT begins at LBA 32768 (16 MiB) and ROOTFS begins at LBA 1081344 (528 MiB), with 512-byte sectors. The verified 8 MiB U-Boot FIT occupies bytes 8 MiB through 16 MiB.
+          EOF
           if [[ "$IMAGE_VARIANT" == "diagnostics" ]]; then
             cp "$GITHUB_WORKSPACE/test-assets/mytvnet1/diagnostics/README.md" \
               "$GITHUB_WORKSPACE/test-output/DIAGNOSTICS-README.txt"
