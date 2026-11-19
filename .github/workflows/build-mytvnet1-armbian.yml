@@ -163,7 +163,7 @@ jobs:
         run: |
           set -euo pipefail
           cd "$GITHUB_WORKSPACE/armbian-build"
-          sudo ./compile.sh build \
+          ./compile.sh build \
             BOARD=mytv-net1 \
             BRANCH=vendor \
             RELEASE=trixie \
