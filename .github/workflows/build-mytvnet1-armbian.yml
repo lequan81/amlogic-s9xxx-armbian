@@ -118,7 +118,8 @@ jobs:
 
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            gcc-aarch64-linux-gnu gzip jq openssl util-linux
+            gcc-aarch64-linux-gnu libc6-dev-arm64-cross \
+            gzip jq openssl util-linux
           aarch64-linux-gnu-gcc -O2 -Wall -Wextra -std=gnu11 \
             "$framework/userpatches/overlay/usr/local/lib/mytvnet1-diag/panel-progress.c" \
             -o "$framework/userpatches/overlay/usr/local/sbin/mytvnet1-panel-progress"
