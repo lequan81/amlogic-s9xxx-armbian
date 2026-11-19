@@ -8,11 +8,6 @@ on:
         required: true
         default: dev-mytv-net1
         type: string
-      release:
-        description: Debian or Ubuntu release for the Armbian root filesystem
-        required: true
-        default: trixie
-        type: string
 
 permissions:
   contents: read
@@ -165,20 +160,14 @@ jobs:
 
       - name: Build full Armbian image
         shell: bash
-        env:
-          RELEASE: ${{ inputs.release }}
         run: |
           set -euo pipefail
-          [[ "$RELEASE" =~ ^[a-z0-9-]+$ ]] || {
-            echo "Invalid release" >&2
-            exit 1
-          }
           cd "$GITHUB_WORKSPACE/armbian-build"
           sudo ./compile.sh build \
             BOARD=mytv-net1 \
             BRANCH=vendor \
-            RELEASE="$RELEASE" \
-            BUILD_MINIMAL=no \
+            RELEASE=trixie \
+            BUILD_MINIMAL=yes \
             BUILD_DESKTOP=no \
             KERNEL_CONFIGURE=no \
             COMPRESS_OUTPUTIMAGE=img \
