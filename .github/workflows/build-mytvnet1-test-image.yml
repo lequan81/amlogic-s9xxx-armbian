@@ -1,10 +1,10 @@
-name: Cook MyTV Net 1 test image
+name: Cook MyTV Net 1 image variants
 
 on:
   workflow_dispatch:
     inputs:
       base_image_url:
-        description: Public URL of the base Armbian .img or .img.gz built by this fork
+        description: Public URL of a full-disk Armbian 26.11 .img or .img.gz image
         required: true
         type: string
       kernel_run_id:
@@ -23,14 +23,23 @@ permissions:
 
 jobs:
   cook:
+    name: Cook ${{ matrix.variant }} image
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        variant:
+          - baseline
+          - custom-kernel
+          - diagnostics
     steps:
-      - name: Checkout AML fork and test bootloader files
+      - name: Checkout AML fork and verified bootloader files
         uses: actions/checkout@v6
         with:
           persist-credentials: false
 
       - name: Download custom kernel artifact
+        if: matrix.variant != 'baseline'
         uses: actions/download-artifact@v4
         with:
           name: mytvnet1-kernel-${{ inputs.kernel_ref }}
@@ -41,12 +50,15 @@ jobs:
       - name: Install image tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y binfmt-support curl file gcc-aarch64-linux-gnu gzip jq kmod parted qemu-user-static util-linux
+          sudo apt-get install -y \
+            binfmt-support curl file gcc-aarch64-linux-gnu gzip jq kmod \
+            parted qemu-user-static u-boot-tools util-linux
 
       - name: Download and cook image
         shell: bash
         env:
           BASE_IMAGE_URL: ${{ inputs.base_image_url }}
+          IMAGE_VARIANT: ${{ matrix.variant }}
         run: |
           set -euo pipefail
           work="$RUNNER_TEMP/mytvnet1-image"
@@ -56,25 +68,31 @@ jobs:
 
           curl --fail --location --retry 3 "$BASE_IMAGE_URL" -o "$work/base.download"
           if file "$work/base.download" | grep -qi 'gzip compressed'; then
-            gzip -dc "$work/base.download" > "$work/Armbian_MyTV-Net1_test.img"
+            gzip -dc "$work/base.download" > "$work/Armbian_MyTV-Net1_${IMAGE_VARIANT}.img"
           else
-            cp "$work/base.download" "$work/Armbian_MyTV-Net1_test.img"
+            cp "$work/base.download" "$work/Armbian_MyTV-Net1_${IMAGE_VARIANT}.img"
           fi
-          image="$work/Armbian_MyTV-Net1_test.img"
+          image="$work/Armbian_MyTV-Net1_${IMAGE_VARIANT}.img"
 
-          (
-            cd "$kernel"
-            sha256sum -c SHA256SUMS
-          )
-          release="$(cat "$kernel/kernelrelease.txt")"
           idb="$bootloader/idbloader.img"
           fit="$bootloader/u-boot.itb"
           (cd "$bootloader" && sha256sum -c SHA256SUMS)
           test -s "$image"
-          test -s "$kernel/boot/Image"
-          test -s "$kernel/boot/dtb/rockchip/rk3528-mytv-net1.dtb"
           test -s "$idb"
           test -s "$fit"
+
+          if [[ "$IMAGE_VARIANT" != "baseline" ]]; then
+            (
+              cd "$kernel"
+              sha256sum -c SHA256SUMS
+            )
+            release="$(cat "$kernel/kernelrelease.txt")"
+            test -s "$kernel/boot/Image"
+            test -s "$kernel/boot/dtb/rockchip/rk3528-mytv-net1.dtb"
+            test -s "$kernel/mytvnet1-modules.tar.gz"
+          else
+            release=""
+          fi
 
           python3 - "$idb" "$fit" <<'PY'
           import pathlib, sys
@@ -84,7 +102,9 @@ jobs:
           if fit[:4] != bytes.fromhex("d00dfeed"):
               raise SystemExit("u-boot.itb is not a FIT image")
           if len(idb) > 8 * 1024 * 1024 - 32 * 1024:
-              raise SystemExit("idbloader.img overlaps the 8 MiB U-Boot FIT slot")
+              raise SystemExit("idbloader.img overlaps the U-Boot FIT slot")
+          if len(fit) != 8 * 1024 * 1024:
+              raise SystemExit("Expected the verified 8 MiB u-boot.itb slice")
           print(f"IDB loader: {len(idb)} bytes; FIT U-Boot: {len(fit)} bytes")
           PY
 
@@ -92,12 +112,16 @@ jobs:
           first_start="$(sfdisk -J "$image" | jq -r '.partitiontable.partitions[0].start')"
           first_start_bytes=$((sector_size * first_start))
           test "$first_start_bytes" -ge $((8 * 1024 * 1024 + $(stat -c %s "$fit"))) || {
-            echo "First partition starts too early for the selected U-Boot FIT" >&2
+            echo "First partition starts too early for the verified U-Boot FIT" >&2
             exit 1
           }
 
           loop="$(sudo losetup --find --show --partscan "$image")"
           cleanup() {
+            for path in run sys proc dev; do
+              sudo umount -R "$work/mnt/$path" 2>/dev/null || true
+            done
+            sudo umount "$work/mnt/boot" 2>/dev/null || true
             sudo umount "$work/bootmnt" 2>/dev/null || true
             sudo umount "$work/mnt" 2>/dev/null || true
             sudo losetup -d "$loop" 2>/dev/null || true
@@ -117,9 +141,6 @@ jobs:
           done < <(lsblk -lnpo NAME "$loop" | tail -n +2)
           test -n "$rootpart" || { echo "Could not find the Armbian root partition" >&2; exit 1; }
 
-          # The Armbian rootfs has a separate /boot partition. Locate the
-          # partition containing boot.cmd and armbianEnv.txt; U-Boot reads
-          # Image and dtb from this filesystem, not rootfs/boot.
           bootpart=""
           while read -r part; do
             [ -b "$part" ] || continue
@@ -134,63 +155,76 @@ jobs:
           done < <(lsblk -lnpo NAME "$loop" | tail -n +2)
           test -n "$bootpart" || { echo "Could not find the Armbian BOOT partition" >&2; exit 1; }
           grep -Fq '${prefix}Image' "$work/bootmnt/boot.cmd" || {
-            echo "boot.cmd does not load the expected Image file" >&2
+            echo "boot.cmd does not load Image" >&2
             exit 1
           }
           grep -Fq '${prefix}dtb/${fdtfile}' "$work/bootmnt/boot.cmd" || {
-            echo "boot.cmd does not load the DTB selected by fdtfile" >&2
+            echo "boot.cmd does not load the fdtfile DTB" >&2
             exit 1
           }
 
-          # Add diagnostic packages to the ARM64 rootfs while cooking, so the
-          # first boot does not need working Ethernet to start the AP/web UI.
-          diag_pass="$(openssl rand -hex 8)"
-          sudo cp /usr/bin/qemu-aarch64-static "$work/mnt/usr/bin/"
-          policy="$work/mnt/usr/sbin/policy-rc.d"
-          if [ -e "$policy" ]; then
-            echo "Refusing to overwrite existing policy-rc.d" >&2
-            exit 1
-          fi
-          printf '#!/bin/sh\nexit 101\n' | sudo tee "$policy" >/dev/null
-          sudo chmod 0755 "$policy"
-          # Make the runner DNS resolver visible inside the offline ARM64 rootfs chroot.
-          resolv_path="$work/mnt/etc/resolv.conf"
-          if [ -e "$resolv_path" ] || [ -L "$resolv_path" ]; then
-            sudo cp -a "$resolv_path" "$work/resolv.conf.original"
-          fi
-          sudo rm -f "$resolv_path"
-          sudo cp -L /etc/resolv.conf "$resolv_path"
-          grep -Eq "^[[:space:]]*nameserver[[:space:]]+" "$resolv_path" || {
-            echo "Runner resolv.conf has no nameserver" >&2
-            exit 1
-          }
-          sudo chroot "$work/mnt" /usr/bin/qemu-aarch64-static -L / /usr/bin/apt-get update
-          sudo chroot "$work/mnt" /usr/bin/qemu-aarch64-static -L / /usr/bin/apt-get install -y dnsmasq hostapd iproute2 iw python3 rfkill usbutils wireless-regdb
-          sudo chroot "$work/mnt" /usr/bin/qemu-aarch64-static -L / /usr/bin/apt-get clean || true
-          sudo rm -f "$resolv_path"
-          if [ -e "$work/resolv.conf.original" ] || [ -L "$work/resolv.conf.original" ]; then
-            sudo cp -a "$work/resolv.conf.original" "$resolv_path"
-          fi
-          sudo rm -f "$policy" "$work/mnt/usr/bin/qemu-aarch64-static"
+          if [[ "$IMAGE_VARIANT" == "diagnostics" ]]; then
+            # Install diagnostics into the ARM64 rootfs without starting its services.
+            diag_pass="$(openssl rand -hex 8)"
+            sudo cp /usr/bin/qemu-aarch64-static "$work/mnt/usr/bin/"
+            policy="$work/mnt/usr/sbin/policy-rc.d"
+            if [ -e "$policy" ]; then
+              echo "Refusing to overwrite existing policy-rc.d" >&2
+              exit 1
+            fi
+            printf '#!/bin/sh\nexit 101\n' | sudo tee "$policy" >/dev/null
+            sudo chmod 0755 "$policy"
 
-          diag="$GITHUB_WORKSPACE/test-assets/mytvnet1/diagnostics"
-          aarch64-linux-gnu-gcc -O2 -Wall -Wextra -std=gnu11 "$diag/panel-progress.c" -o "$work/mytvnet1-panel-progress"
-          sudo install -m 0755 "$work/mytvnet1-panel-progress" "$work/mnt/usr/local/sbin/mytvnet1-panel-progress"
-          sudo install -D -m 0755 "$diag/capture.sh" "$work/mnt/usr/local/sbin/mytvnet1-diag-capture"
-          sudo install -m 0755 "$diag/start-ap.sh" "$work/mnt/usr/local/sbin/mytvnet1-diag-start-ap"
-          sudo install -m 0755 "$diag/start-eth-dhcp.sh" "$work/mnt/usr/local/sbin/mytvnet1-diag-start-eth-dhcp"
-          sudo install -D -m 0644 "$diag/web.py" "$work/mnt/usr/local/lib/mytvnet1-diag/web.py"
-          sudo install -D -m 0644 "$diag/dnsmasq-ap.conf" "$work/mnt/etc/mytvnet1-diag/dnsmasq-ap.conf"
-          sudo install -m 0644 "$diag/dnsmasq-eth.conf" "$work/mnt/etc/mytvnet1-diag/dnsmasq-eth.conf"
-          sudo install -m 0644 "$diag/mytvnet1-diag-capture.service" "$work/mnt/etc/systemd/system/"
-          sudo install -m 0644 "$diag/mytvnet1-diag-ap.service" "$work/mnt/etc/systemd/system/"
-          sudo install -m 0644 "$diag/mytvnet1-diag-ap-dhcp.service" "$work/mnt/etc/systemd/system/"
-          sudo install -m 0644 "$diag/mytvnet1-diag-eth-dhcp.service" "$work/mnt/etc/systemd/system/"
-          sudo install -m 0644 "$diag/mytvnet1-diag-web.service" "$work/mnt/etc/systemd/system/"
-          sudo install -m 0644 "$diag/mytvnet1-diag-final.service" "$work/mnt/etc/systemd/system/"
-          sudo install -m 0644 "$diag/mytvnet1-panel-progress.service" "$work/mnt/etc/systemd/system/"
-          sudo install -D -m 0600 /dev/null "$work/mnt/etc/hostapd/mytvnet1-diag.conf"
-          sudo tee "$work/mnt/etc/hostapd/mytvnet1-diag.conf" >/dev/null <<EOF
+            resolv_path="$work/mnt/etc/resolv.conf"
+            if [ -e "$resolv_path" ] || [ -L "$resolv_path" ]; then
+              sudo cp -a "$resolv_path" "$work/resolv.conf.original"
+            fi
+            sudo rm -f "$resolv_path"
+            sudo cp -L /etc/resolv.conf "$resolv_path"
+            grep -Eq "^[[:space:]]*nameserver[[:space:]]+" "$resolv_path" || {
+              echo "Runner resolv.conf has no nameserver" >&2
+              exit 1
+            }
+
+            # Bind pseudo-filesystems so package scripts see the target's /dev/null,
+            # /dev/pts and proc/sys interfaces while running inside chroot.
+            for path in dev proc sys run; do
+              sudo mount --rbind "/$path" "$work/mnt/$path"
+              sudo mount --make-rslave "$work/mnt/$path"
+            done
+            sudo chroot "$work/mnt" /usr/bin/qemu-aarch64-static -L / /usr/bin/apt-get update
+            sudo chroot "$work/mnt" /usr/bin/qemu-aarch64-static -L / /usr/bin/apt-get install -y \
+              dnsmasq hostapd iproute2 iw python3 rfkill usbutils wireless-regdb
+            sudo chroot "$work/mnt" /usr/bin/qemu-aarch64-static -L / /usr/bin/apt-get clean || true
+            sudo rm -f "$resolv_path"
+            if [ -e "$work/resolv.conf.original" ] || [ -L "$work/resolv.conf.original" ]; then
+              sudo cp -a "$work/resolv.conf.original" "$resolv_path"
+            fi
+            sudo rm -f "$policy" "$work/mnt/usr/bin/qemu-aarch64-static"
+            for path in run sys proc dev; do
+              sudo umount -R "$work/mnt/$path"
+            done
+
+            diag="$GITHUB_WORKSPACE/test-assets/mytvnet1/diagnostics"
+            aarch64-linux-gnu-gcc -O2 -Wall -Wextra -std=gnu11 \
+              "$diag/panel-progress.c" -o "$work/mytvnet1-panel-progress"
+            sudo install -m 0755 "$work/mytvnet1-panel-progress" \
+              "$work/mnt/usr/local/sbin/mytvnet1-panel-progress"
+            sudo install -D -m 0755 "$diag/capture.sh" \
+              "$work/mnt/usr/local/sbin/mytvnet1-diag-capture"
+            sudo install -m 0755 "$diag/start-ap.sh" \
+              "$work/mnt/usr/local/sbin/mytvnet1-diag-start-ap"
+            sudo install -m 0755 "$diag/start-eth-dhcp.sh" \
+              "$work/mnt/usr/local/sbin/mytvnet1-diag-start-eth-dhcp"
+            sudo install -D -m 0644 "$diag/web.py" \
+              "$work/mnt/usr/local/lib/mytvnet1-diag/web.py"
+            sudo install -D -m 0644 "$diag/dnsmasq-ap.conf" \
+              "$work/mnt/etc/mytvnet1-diag/dnsmasq-ap.conf"
+            sudo install -m 0644 "$diag/dnsmasq-eth.conf" \
+              "$work/mnt/etc/mytvnet1-diag/dnsmasq-eth.conf"
+            sudo install -m 0644 "$diag"/*.service "$work/mnt/etc/systemd/system/"
+            sudo install -D -m 0600 /dev/null "$work/mnt/etc/hostapd/mytvnet1-diag.conf"
+            sudo tee "$work/mnt/etc/hostapd/mytvnet1-diag.conf" >/dev/null <<EOF
           interface=wlan0
           driver=nl80211
           ctrl_interface=/run/hostapd
@@ -207,63 +241,125 @@ jobs:
           rsn_pairwise=CCMP
           wpa_passphrase=$diag_pass
           EOF
-          sudo chmod 0600 "$work/mnt/etc/hostapd/mytvnet1-diag.conf"
-          sudo systemctl --root="$work/mnt" disable hostapd.service dnsmasq.service 2>/dev/null || true
-          sudo systemctl --root="$work/mnt" enable mytvnet1-diag-capture.service mytvnet1-diag-ap.service mytvnet1-diag-ap-dhcp.service mytvnet1-diag-eth-dhcp.service mytvnet1-diag-web.service mytvnet1-diag-final.service mytvnet1-panel-progress.service
-          sudo mkdir -p "$work/mnt/var/lib/mytvnet1-diag" "$work/mnt/mnt/mytv-diag"
-
-          sudo install -m 0644 "$kernel/boot/Image" "$work/bootmnt/Image"
-          sudo install -D -m 0644 \
-            "$kernel/boot/dtb/rockchip/rk3528-mytv-net1.dtb" \
-            "$work/bootmnt/dtb/rockchip/rk3528-mytv-net1.dtb"
-          sudo cmp "$kernel/boot/Image" "$work/bootmnt/Image"
-          sudo cmp "$kernel/boot/dtb/rockchip/rk3528-mytv-net1.dtb" \
-            "$work/bootmnt/dtb/rockchip/rk3528-mytv-net1.dtb"
-          sudo tar -xzf "$kernel/mytvnet1-modules.tar.gz" -C "$work"
-          sudo install -d "$work/mnt/lib/modules"
-          sudo cp -a "$work/modules/$release" "$work/mnt/lib/modules/"
-          sudo depmod -b "$work/mnt" "$release"
-
-          if grep -q '^fdtfile=' "$work/bootmnt/armbianEnv.txt"; then
-            sudo sed -i 's#^fdtfile=.*#fdtfile=rockchip/rk3528-mytv-net1.dtb#' \
-              "$work/bootmnt/armbianEnv.txt"
-          else
-            echo 'fdtfile=rockchip/rk3528-mytv-net1.dtb' | \
-              sudo tee -a "$work/bootmnt/armbianEnv.txt" >/dev/null
+            sudo chmod 0600 "$work/mnt/etc/hostapd/mytvnet1-diag.conf"
+            sudo systemctl --root="$work/mnt" disable hostapd.service dnsmasq.service 2>/dev/null || true
+            sudo systemctl --root="$work/mnt" enable \
+              mytvnet1-diag-capture.service mytvnet1-diag-ap.service \
+              mytvnet1-diag-ap-dhcp.service mytvnet1-diag-eth-dhcp.service \
+              mytvnet1-diag-web.service mytvnet1-diag-final.service \
+              mytvnet1-panel-progress.service
+            sudo mkdir -p "$work/mnt/var/lib/mytvnet1-diag" "$work/mnt/mnt/mytv-diag"
           fi
-          if [ -f "$work/bootmnt/extlinux/extlinux.conf" ]; then
-            sudo sed -i 's#^[[:space:]]*FDT .*#  FDT /dtb/rockchip/rk3528-mytv-net1.dtb#' \
-              "$work/bootmnt/extlinux/extlinux.conf"
+
+          if [[ "$IMAGE_VARIANT" != "baseline" ]]; then
+            sudo install -m 0644 "$kernel/boot/Image" "$work/bootmnt/Image"
+            sudo install -D -m 0644 \
+              "$kernel/boot/dtb/rockchip/rk3528-mytv-net1.dtb" \
+              "$work/bootmnt/dtb/rockchip/rk3528-mytv-net1.dtb"
+            sudo tar -xzf "$kernel/mytvnet1-modules.tar.gz" -C "$work"
+            sudo install -d "$work/mnt/lib/modules"
+            sudo cp -a "$work/modules/$release" "$work/mnt/lib/modules/"
+            sudo depmod -b "$work/mnt" "$release"
+
+            test -x "$work/mnt/usr/sbin/update-initramfs" || {
+              echo "Rootfs lacks initramfs-tools; cannot create an initrd for the custom kernel" >&2
+              exit 1
+            }
+            sudo cp /usr/bin/qemu-aarch64-static "$work/mnt/usr/bin/"
+            initramfs_conf="$work/mnt/etc/initramfs-tools/initramfs.conf"
+            if grep -q '^COMPRESS=' "$initramfs_conf"; then
+              sudo sed -i 's#^COMPRESS=.*#COMPRESS=gzip#' "$initramfs_conf"
+            else
+              echo 'COMPRESS=gzip' | sudo tee -a "$initramfs_conf" >/dev/null
+            fi
+            sudo mount --bind "$work/bootmnt" "$work/mnt/boot"
+            for path in dev proc sys run; do
+              sudo mount --rbind "/$path" "$work/mnt/$path"
+              sudo mount --make-rslave "$work/mnt/$path"
+            done
+            if [ -e "$work/bootmnt/initrd.img-$release" ]; then
+              initramfs_action=-u
+            else
+              initramfs_action=-c
+            fi
+            sudo chroot "$work/mnt" /usr/bin/qemu-aarch64-static -L / /bin/bash \
+              /usr/sbin/update-initramfs "$initramfs_action" -k "$release"
+            for path in run sys proc dev; do
+              sudo umount -R "$work/mnt/$path"
+            done
+            sudo umount "$work/mnt/boot"
+            sudo rm -f "$work/mnt/usr/bin/qemu-aarch64-static"
+            sudo mkimage -A arm64 -O linux -T ramdisk -C gzip \
+              -n "MyTV Net 1 initramfs $release" \
+              -d "$work/bootmnt/initrd.img-$release" "$work/bootmnt/uInitrd"
+
+            if grep -q '^fdtfile=' "$work/bootmnt/armbianEnv.txt"; then
+              sudo sed -i 's#^fdtfile=.*#fdtfile=rockchip/rk3528-mytv-net1.dtb#' \
+                "$work/bootmnt/armbianEnv.txt"
+            else
+              echo 'fdtfile=rockchip/rk3528-mytv-net1.dtb' | \
+                sudo tee -a "$work/bootmnt/armbianEnv.txt" >/dev/null
+            fi
+            if [ -f "$work/bootmnt/extlinux/extlinux.conf" ]; then
+              sudo sed -i 's#^[[:space:]]*FDT .*#  FDT /dtb/rockchip/rk3528-mytv-net1.dtb#' \
+                "$work/bootmnt/extlinux/extlinux.conf"
+            fi
+            printf '%s\n' "$release" | \
+              sudo tee "$work/bootmnt/mytvnet1-kernelrelease.txt" >/dev/null
           fi
-          printf '%s\n' "$release" | sudo tee "$work/bootmnt/mytvnet1-kernelrelease.txt" >/dev/null
+
+
           sync
           sudo umount "$work/bootmnt"
           sudo umount "$work/mnt"
           sudo losetup -d "$loop"
           trap - EXIT
 
-          # RK3528 BootROM layout used by the known-good cooking_img files:
-          # idbloader at sector 64 (32 KiB), U-Boot FIT at sector 16384 (8 MiB).
+          # Match the verified PowerShell/Ophub Rockchip layout: IDB at LBA 64,
+          # then the complete 8 MiB FIT slice at LBA 16384. This image uses those
+          # two verified files; no separate TRUST_IMG was present in that source.
           sudo dd if="$idb" of="$image" bs=512 seek=64 conv=notrunc,fsync status=none
           sudo dd if="$fit" of="$image" bs=512 seek=16384 conv=notrunc,fsync status=none
-          sha256sum "$image" "$idb" "$fit" "$kernel/boot/dtb/rockchip/rk3528-mytv-net1.dtb" \
-            | tee "$work/SHA256SUMS"
-          gzip -1 "$image"
-          mkdir -p "$GITHUB_WORKSPACE/test-output"
-          mv "$image.gz" "$GITHUB_WORKSPACE/test-output/Armbian_MyTV-Net1_custom-kernel-uboot.img.gz"
-          cp "$work/SHA256SUMS" "$GITHUB_WORKSPACE/test-output/SHA256SUMS"
-          cp "$GITHUB_WORKSPACE/test-assets/mytvnet1/diagnostics/README.md" "$GITHUB_WORKSPACE/test-output/DIAGNOSTICS-README.txt"
-          {
-            echo "SSID: MyTVNet1-Diag"
-            echo "Password: $diag_pass"
-            echo "Wi-Fi URL: http://192.168.77.1:8080"
-            echo "Optional direct Ethernet: create an empty ENABLE_ETH_DHCP file on the MYTV_DIAG USB, connect laptop directly, then open http://192.168.88.1:8080"
-          } > "$GITHUB_WORKSPACE/test-output/DIAGNOSTIC-ACCESS.txt"
+          idb_sectors=$(($(stat -c %s "$idb") / 512))
+          fit_sectors=$(($(stat -c %s "$fit") / 512))
+          sudo dd if="$image" of="$work/idb.readback" bs=512 skip=64 count="$idb_sectors" status=none
+          sudo dd if="$image" of="$work/fit.readback" bs=512 skip=16384 count="$fit_sectors" status=none
+          cmp "$idb" "$work/idb.readback"
+          cmp "$fit" "$work/fit.readback"
 
-      - name: Upload cooked test image
+          mkdir -p "$GITHUB_WORKSPACE/test-output"
+          image_name="Armbian_MyTV-Net1_${IMAGE_VARIANT}.img.gz"
+          gzip -1 "$image"
+          mv "$image.gz" "$GITHUB_WORKSPACE/test-output/$image_name"
+          (
+            cd "$GITHUB_WORKSPACE/test-output"
+            sha256sum "$image_name" > SHA256SUMS
+          )
+          {
+            echo "variant=$IMAGE_VARIANT"
+            echo "idbloader_sha256=$(sha256sum "$idb" | awk '{print $1}')"
+            echo "u_boot_fit_sha256=$(sha256sum "$fit" | awk '{print $1}')"
+            if [[ "$IMAGE_VARIANT" != "baseline" ]]; then
+              echo "kernelrelease=$release"
+              echo "kernel_image_sha256=$(sha256sum "$kernel/boot/Image" | awk '{print $1}')"
+              echo "mytv_dtb_sha256=$(sha256sum "$kernel/boot/dtb/rockchip/rk3528-mytv-net1.dtb" | awk '{print $1}')"
+            fi
+          } > "$GITHUB_WORKSPACE/test-output/BUILD-INFO.txt"
+          if [[ "$IMAGE_VARIANT" == "diagnostics" ]]; then
+            cp "$GITHUB_WORKSPACE/test-assets/mytvnet1/diagnostics/README.md" \
+              "$GITHUB_WORKSPACE/test-output/DIAGNOSTICS-README.txt"
+            {
+              echo "SSID: MyTVNet1-Diag"
+              echo "Password: $diag_pass"
+              echo "Wi-Fi URL: http://192.168.77.1:8080"
+              echo "Optional direct Ethernet: create an empty ENABLE_ETH_DHCP file on the MYTV_DIAG USB, connect laptop directly, then open http://192.168.88.1:8080"
+            } > "$GITHUB_WORKSPACE/test-output/DIAGNOSTIC-ACCESS.txt"
+          fi
+
+      - name: Upload cooked image artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Armbian-MyTV-Net1-custom-kernel-uboot
+          name: Armbian-MyTV-Net1-${{ matrix.variant }}
           path: test-output/
           if-no-files-found: error
           retention-days: 14

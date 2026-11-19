@@ -1,0 +1,254 @@
+name: Build MyTV Net 1 from Armbian source
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernel_ref:
+        description: Branch in lequan81/linux-6.1.y-rockchip containing the current DTS
+        required: true
+        default: dev-mytv-net1
+        type: string
+      release:
+        description: Debian or Ubuntu release for the Armbian root filesystem
+        required: true
+        default: trixie
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - name: Checkout this fork and MyTV build recipe
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Checkout kernel defconfig and verify board DTS
+        uses: actions/checkout@v6
+        with:
+          repository: lequan81/linux-6.1.y-rockchip
+          ref: ${{ inputs.kernel_ref }}
+          path: kernel-config-source
+          persist-credentials: false
+          sparse-checkout: |
+            arch/arm64/configs/rockchip_linux_defconfig
+            arch/arm64/boot/dts/rockchip/Makefile
+            arch/arm64/boot/dts/rockchip/rk3528-mytv-net1.dts
+          sparse-checkout-cone-mode: false
+
+      - name: Checkout Armbian build framework
+        uses: actions/checkout@v6
+        with:
+          repository: armbian/build
+          ref: main
+          path: armbian-build
+          persist-credentials: false
+
+      - name: Prepare Armbian board configuration and diagnostic image
+        shell: bash
+        env:
+          KERNEL_REF: ${{ inputs.kernel_ref }}
+        run: |
+          set -euo pipefail
+          [[ "$KERNEL_REF" =~ ^[A-Za-z0-9._/-]+$ ]] || {
+            echo "Invalid kernel_ref" >&2
+            exit 1
+          }
+          framework="$GITHUB_WORKSPACE/armbian-build"
+          recipe="$GITHUB_WORKSPACE/armbian/mytvnet1"
+          kernel_source="$GITHUB_WORKSPACE/kernel-config-source"
+
+          test -s "$kernel_source/arch/arm64/configs/rockchip_linux_defconfig"
+          test -s "$kernel_source/arch/arm64/boot/dts/rockchip/rk3528-mytv-net1.dts"
+          grep -Fq 'rk3528-mytv-net1.dtb' \
+            "$kernel_source/arch/arm64/boot/dts/rockchip/Makefile"
+          echo "KERNEL_SOURCE_SHA=$(git -C "$kernel_source" rev-parse HEAD)" >> "$GITHUB_ENV"
+
+          install -m 0644 "$recipe/config/boards/mytv-net1.conf" \
+            "$framework/config/boards/mytv-net1.conf"
+          cp -a "$recipe/userpatches/." "$framework/userpatches/"
+          mkdir -p "$framework/userpatches/config/sources/families"
+          sed "s#branch:dev-mytv-net1#branch:${KERNEL_REF}#" \
+            "$recipe/userpatches/config/sources/families/rk35xx.conf" \
+            > "$framework/userpatches/config/sources/families/rk35xx.conf"
+
+          mkdir -p "$framework/userpatches/overlay/usr/local/sbin"
+          mkdir -p "$framework/userpatches/overlay/usr/local/lib/mytvnet1-diag"
+          mkdir -p "$framework/userpatches/overlay/etc/mytvnet1-diag"
+          mkdir -p "$framework/userpatches/overlay/etc/hostapd"
+          mkdir -p "$framework/userpatches/overlay/etc/systemd/system"
+
+          cp -a "$GITHUB_WORKSPACE/test-assets/mytvnet1/diagnostics/." \
+            "$framework/userpatches/overlay/usr/local/lib/mytvnet1-diag/"
+          for script in capture.sh start-ap.sh start-eth-dhcp.sh; do
+            install -m 0755 \
+              "$framework/userpatches/overlay/usr/local/lib/mytvnet1-diag/$script" \
+              "$framework/userpatches/overlay/usr/local/sbin/mytvnet1-diag-${script%.sh}"
+          done
+
+          for unit in "$framework"/userpatches/overlay/usr/local/lib/mytvnet1-diag/*.service; do
+            install -m 0644 "$unit" \
+              "$framework/userpatches/overlay/etc/systemd/system/$(basename "$unit")"
+          done
+          install -m 0644 \
+            "$framework/userpatches/overlay/usr/local/lib/mytvnet1-diag/dnsmasq-ap.conf" \
+            "$framework/userpatches/overlay/etc/mytvnet1-diag/dnsmasq-ap.conf"
+          install -m 0644 \
+            "$framework/userpatches/overlay/usr/local/lib/mytvnet1-diag/dnsmasq-eth.conf" \
+            "$framework/userpatches/overlay/etc/mytvnet1-diag/dnsmasq-eth.conf"
+
+          # Armbian uses this complete kernel config as the board's vendor config.
+          python3 - "$kernel_source/arch/arm64/configs/rockchip_linux_defconfig" \
+            "$framework/userpatches/linux-rk35xx-vendor.config" <<'PY'
+          import pathlib, re, sys
+          source, target = map(pathlib.Path, sys.argv[1:])
+          lines = source.read_text().splitlines()
+          keys = {"CONFIG_EXPERT", "CONFIG_GPIOLIB", "CONFIG_GPIO_SYSFS"}
+          lines = [line for line in lines if not any(
+              re.match(rf"^(?:# )?{re.escape(key)}(?:=| is not set$)", line)
+              for key in keys
+          )]
+          lines.extend(("CONFIG_EXPERT=y", "CONFIG_GPIOLIB=y", "CONFIG_GPIO_SYSFS=y"))
+          target.write_text("\n".join(lines) + "\n")
+          PY
+
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-aarch64-linux-gnu gzip jq openssl util-linux
+          aarch64-linux-gnu-gcc -O2 -Wall -Wextra -std=gnu11 \
+            "$framework/userpatches/overlay/usr/local/lib/mytvnet1-diag/panel-progress.c" \
+            -o "$framework/userpatches/overlay/usr/local/sbin/mytvnet1-panel-progress"
+          chmod 0755 "$framework/userpatches/overlay/usr/local/sbin/mytvnet1-panel-progress"
+
+          diag_pass="$(openssl rand -hex 8)"
+          cat > "$framework/userpatches/overlay/etc/hostapd/mytvnet1-diag.conf" <<EOF
+          interface=wlan0
+          driver=nl80211
+          ctrl_interface=/run/hostapd
+          ctrl_interface_group=0
+          ssid=MyTVNet1-Diag
+          country_code=VN
+          ieee80211d=1
+          hw_mode=g
+          channel=6
+          wmm_enabled=1
+          auth_algs=1
+          wpa=2
+          wpa_key_mgmt=WPA-PSK
+          rsn_pairwise=CCMP
+          wpa_passphrase=$diag_pass
+          EOF
+          chmod 0600 "$framework/userpatches/overlay/etc/hostapd/mytvnet1-diag.conf"
+
+          mkdir -p "$GITHUB_WORKSPACE/build-output"
+          {
+            echo "SSID: MyTVNet1-Diag"
+            echo "Password: $diag_pass"
+            echo "Wi-Fi status: http://192.168.77.1:8080"
+            echo "Full report: http://192.168.77.1:8080/report.txt"
+            echo "To enable Ethernet DHCP, create ENABLE_ETH_DHCP on the MYTV_DIAG USB; then connect laptop directly and open http://192.168.88.1:8080"
+          } > "$GITHUB_WORKSPACE/build-output/DIAGNOSTIC-ACCESS.txt"
+          cp "$framework/userpatches/overlay/usr/local/lib/mytvnet1-diag/README.md" \
+            "$GITHUB_WORKSPACE/build-output/DIAGNOSTICS-README.txt"
+
+      - name: Free runner disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android/sdk /usr/share/dotnet \
+            /opt/ghc /usr/local/share/boost /usr/local/share/chromium \
+            /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - name: Build full Armbian image
+        shell: bash
+        env:
+          RELEASE: ${{ inputs.release }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE" =~ ^[a-z0-9-]+$ ]] || {
+            echo "Invalid release" >&2
+            exit 1
+          }
+          cd "$GITHUB_WORKSPACE/armbian-build"
+          sudo ./compile.sh build \
+            BOARD=mytv-net1 \
+            BRANCH=vendor \
+            RELEASE="$RELEASE" \
+            BUILD_MINIMAL=no \
+            BUILD_DESKTOP=no \
+            KERNEL_CONFIGURE=no \
+            COMPRESS_OUTPUTIMAGE=img \
+            SKIP_COMPRESSING=img \
+            SHARE_LOG=yes
+
+      - name: Install verified MyTV Net 1 loader and package artifact
+        shell: bash
+        env:
+          KERNEL_REF: ${{ inputs.kernel_ref }}
+        run: |
+          set -euo pipefail
+          bootloader="$GITHUB_WORKSPACE/test-assets/mytvnet1"
+          output="$GITHUB_WORKSPACE/armbian-build/output/images"
+          (cd "$bootloader" && sha256sum -c SHA256SUMS)
+          mapfile -t images < <(find "$output" -maxdepth 1 -type f -name '*.img' -print)
+          [[ "${#images[@]}" -eq 1 ]] || {
+            echo "Expected one raw .img, found ${#images[@]}" >&2
+            printf '%s\n' "${images[@]}" >&2
+            exit 1
+          }
+          image="${images[0]}"
+          fit="$bootloader/u-boot.itb"
+          idb="$bootloader/idbloader.img"
+
+          python3 - "$idb" "$fit" <<'PY'
+          import pathlib, sys
+          idb, fit = (pathlib.Path(p).read_bytes() for p in sys.argv[1:])
+          if idb[:4] != b"RKNS":
+              raise SystemExit("idbloader.img does not start with RKNS")
+          if fit[:4] != bytes.fromhex("d00dfeed") or len(fit) != 8 * 1024 * 1024:
+              raise SystemExit("u-boot.itb is not the verified 8 MiB FIT image")
+          PY
+
+          first_start="$(sfdisk -J "$image" | jq -r '.partitiontable.partitions[0].start')"
+          sector_size="$(sfdisk -J "$image" | jq -r '.partitiontable.sectorsize')"
+          (( first_start * sector_size >= 16 * 1024 * 1024 )) || {
+            echo "First partition overlaps the loader/FIT area" >&2
+            exit 1
+          }
+          sudo dd if="$idb" of="$image" bs=512 seek=64 conv=notrunc,fsync status=none
+          sudo dd if="$fit" of="$image" bs=512 seek=16384 conv=notrunc,fsync status=none
+
+          sectors_idb=$(($(stat -c %s "$idb") / 512))
+          sectors_fit=$(($(stat -c %s "$fit") / 512))
+          sudo dd if="$image" of="$RUNNER_TEMP/idb.readback" bs=512 skip=64 count="$sectors_idb" status=none
+          sudo dd if="$image" of="$RUNNER_TEMP/fit.readback" bs=512 skip=16384 count="$sectors_fit" status=none
+          cmp "$idb" "$RUNNER_TEMP/idb.readback"
+          cmp "$fit" "$RUNNER_TEMP/fit.readback"
+
+          image_name="Armbian_MyTV-Net1_${GITHUB_RUN_NUMBER}.img.gz"
+          gzip -1 -c "$image" > "$GITHUB_WORKSPACE/build-output/$image_name"
+          (
+            cd "$GITHUB_WORKSPACE/build-output"
+            sha256sum "$image_name" > SHA256SUMS
+            {
+              echo "Build framework: armbian/build"
+              echo "Kernel source: lequan81/linux-6.1.y-rockchip"
+              echo "Kernel ref: $KERNEL_REF"
+              echo "Kernel source commit: $KERNEL_SOURCE_SHA"
+              echo "DTS: rk3528-mytv-net1.dts"
+              echo "Board FD655 pins: GPIO4_A3 / GPIO4_A2 (verified userspace mapping)"
+              echo "IDB loader sha256: $(sha256sum "$idb" | awk '{print $1}')"
+              echo "U-Boot FIT sha256: $(sha256sum "$fit" | awk '{print $1}')"
+            } > BUILD-INFO.txt
+          )
+
+      - name: Upload bootable MyTV Net 1 image
+        uses: actions/upload-artifact@v4
+        with:
+          name: Armbian-MyTV-Net1-source-build
+          path: build-output/
+          if-no-files-found: error
+          retention-days: 14
