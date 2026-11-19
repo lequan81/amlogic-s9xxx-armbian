@@ -23,16 +23,29 @@ static const uint8_t DIGIT_MAP[10] =
 
 static int fd_clk = -1, fd_dat = -1;
 static volatile sig_atomic_t running = 1;
+static bool gpio_write_error_logged;
 
 static void stop_handler(int sig) { (void)sig; running = 0; }
 
-static void write_text(const char *path, const char *value)
+static int write_text(const char *path, const char *value)
 {
     int fd = open(path, O_WRONLY | O_CLOEXEC);
-    if (fd >= 0) {
-        (void)write(fd, value, strlen(value));
+    if (fd < 0)
+        return -1;
+
+    size_t length = strlen(value);
+    ssize_t written;
+    do {
+        written = write(fd, value, length);
+    } while (written < 0 && errno == EINTR);
+
+    if (written < 0 || (size_t)written != length) {
+        int saved_errno = written < 0 ? errno : EIO;
         close(fd);
+        errno = saved_errno;
+        return -1;
     }
+    return close(fd);
 }
 
 static int gpio_open(int pin)
@@ -41,12 +54,14 @@ static int gpio_open(int pin)
     snprintf(path, sizeof(path), "/sys/class/gpio/gpio%d", pin);
     if (access(path, F_OK) != 0) {
         snprintf(value, sizeof(value), "%d", pin);
-        write_text("/sys/class/gpio/export", value);
+        if (write_text("/sys/class/gpio/export", value) < 0 && errno != EBUSY)
+            fprintf(stderr, "GPIO %d export failed: %s\n", pin, strerror(errno));
         for (int i = 0; i < 100 && access(path, F_OK) != 0; ++i)
             usleep(1000);
     }
     snprintf(path, sizeof(path), "/sys/class/gpio/gpio%d/direction", pin);
-    write_text(path, "out");
+    if (write_text(path, "out") < 0)
+        fprintf(stderr, "GPIO %d direction setup failed: %s\n", pin, strerror(errno));
     snprintf(path, sizeof(path), "/sys/class/gpio/gpio%d/value", pin);
     int fd = open(path, O_WRONLY | O_CLOEXEC);
     if (fd < 0)
@@ -62,8 +77,18 @@ static inline void half_delay(void)
 
 static inline void gpio_set(int fd, int value)
 {
-    if (fd >= 0)
-        (void)pwrite(fd, value ? "1" : "0", 1, 0);
+    if (fd < 0)
+        return;
+
+    ssize_t written;
+    do {
+        written = pwrite(fd, value ? "1" : "0", 1, 0);
+    } while (written < 0 && errno == EINTR);
+    if (written != 1 && !gpio_write_error_logged) {
+        int error = written < 0 ? errno : EIO;
+        fprintf(stderr, "FD655 GPIO write failed: %s\n", strerror(error));
+        gpio_write_error_logged = true;
+    }
 }
 static inline void clk(int v) { gpio_set(fd_clk, v); }
 static inline void dat(int v) { gpio_set(fd_dat, v); }
@@ -113,9 +138,12 @@ static bool carrier_up(const char *iface)
     snprintf(path, sizeof(path), "/sys/class/net/%s/carrier", iface);
     int fd = open(path, O_RDONLY | O_CLOEXEC);
     if (fd < 0) return false;
-    (void)read(fd, &value, 1);
+    ssize_t bytes_read;
+    do {
+        bytes_read = read(fd, &value, 1);
+    } while (bytes_read < 0 && errno == EINTR);
     close(fd);
-    return value == '1';
+    return bytes_read == 1 && value == '1';
 }
 
 static bool has_external_usb(void)
