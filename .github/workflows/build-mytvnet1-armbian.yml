@@ -43,6 +43,11 @@ jobs:
           path: armbian-build
           persist-credentials: false
 
+      - name: Register ARM64 QEMU binfmt on the runner
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
       - name: Prepare Armbian board configuration and diagnostic image
         shell: bash
         env:
@@ -67,6 +72,7 @@ jobs:
             "$framework/config/boards/mytv-net1.conf"
           cp -a "$recipe/userpatches/." "$framework/userpatches/"
           mkdir -p "$framework/userpatches/config/sources/families"
+          mkdir -p "$framework/userpatches/extensions"
           sed "s#branch:dev-mytv-net1#branch:${KERNEL_REF}#" \
             "$recipe/userpatches/config/sources/families/rk35xx.conf" \
             > "$framework/userpatches/config/sources/families/rk35xx.conf"
