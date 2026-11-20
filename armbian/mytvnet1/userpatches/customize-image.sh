@@ -36,4 +36,6 @@ fi
 
 # Hold custom kernel/DTB packages so apt upgrade keeps HS200 eMMC, AIC8800, and FD6551 support
 (dpkg-query -W -f='${Package}\n' 'linux-image-*' 'linux-dtb-*' 'linux-headers-*' 2>/dev/null || true) \
-    | xargs -r apt-mark hold
+for pkg in $(dpkg-query -W -f='${Package}\n' 'linux-image-*' 'linux-dtb-*' 2>/dev/null); do
+  apt-mark hold "$pkg"
+done
