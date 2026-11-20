@@ -2,7 +2,7 @@
 set -euo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
-cp -a /tmp/overlay/. /
+rsync -a --no-owner --no-group /tmp/overlay/ /
 apt-get update
 apt-get install -y --no-install-recommends \
         dnsmasq hostapd iproute2 iw python3 rfkill usbutils wireless-regdb
