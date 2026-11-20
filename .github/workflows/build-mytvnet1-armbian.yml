@@ -6,7 +6,7 @@ on:
       kernel_ref:
         description: Branch in lequan81/linux-6.1.y-rockchip containing the current DTS
         required: true
-        default: dev-mytv-net1
+        default: rk3528-mytv-net1
         type: string
 
 permissions:
