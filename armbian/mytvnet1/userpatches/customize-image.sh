@@ -34,7 +34,7 @@ initrd_high=0xffffffffffffffff
 EOF
 fi
 
-# Hold custom kernel/DTB packages so apt upgrade keeps HS200 eMMC, AIC8800, and FD6551 support
-for pkg in $(dpkg-query -W -f='${Package}\n' 'linux-image-*' 'linux-dtb-*' 'linux-headers-*' 2>/dev/null); do
-  apt-mark hold "$pkg"
+# Hold installed kernel and DTB packages so apt upgrade preserves MyTV Net 1 hardware support
+for pkg in $(dpkg-query -W -f='${Package}\n' 'linux-image-*' 'linux-dtb-*' 'linux-headers-*' 2>/dev/null || true); do
+  apt-mark hold "$pkg" || true
 done
